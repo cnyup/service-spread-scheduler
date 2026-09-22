@@ -9,7 +9,7 @@ and `../service-spread-scheduler-dev-design.md` (implementation design).
 
 - Target Kubernetes: **1.28.x** (`k8s.io/kubernetes v1.28.15` + staging
   replaces in `go.mod`; no plugin ABI across minor versions).
-- Module: `gitlab.ttyuyin.com/T5428/service-spread-scheduler`.
+- Module: `github.com/cnyup/service-spread-scheduler`.
 - CRD group: `scheduling.soyup.top/v1alpha1` (`ServiceSpreadPolicy`, short
   name `ssp`).
 

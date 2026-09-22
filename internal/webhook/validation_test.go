@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	sspv1alpha1 "gitlab.ttyuyin.com/T5428/service-spread-scheduler/api/v1alpha1"
+	sspv1alpha1 "github.com/cnyup/service-spread-scheduler/api/v1alpha1"
 )
 
 // errSource simulates an unusable configuration source (fail closed).

@@ -6,7 +6,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
-	sspv1alpha1 "gitlab.ttyuyin.com/T5428/service-spread-scheduler/api/v1alpha1"
+	sspv1alpha1 "github.com/cnyup/service-spread-scheduler/api/v1alpha1"
 )
 
 // serviceSelectorValue validates spec.serviceSelector under the cluster-level

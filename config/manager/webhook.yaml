@@ -20,7 +20,7 @@ spec:
       serviceAccountName: service-spread-webhook
       containers:
         - name: webhook
-          image: gitlab.ttyuyin.com/T5428/service-spread-scheduler/webhook:latest
+          image: ghcr.io/cnyup/service-spread-scheduler/webhook:latest
           args:
             - --config-map-namespace=service-spread-system
             - --config-map-name=service-spread-scheduler-config

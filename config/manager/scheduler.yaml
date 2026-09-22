@@ -28,7 +28,7 @@ spec:
       serviceAccountName: service-spread-scheduler
       containers:
         - name: kube-scheduler
-          image: gitlab.ttyuyin.com/T5428/service-spread-scheduler/scheduler:latest
+          image: ghcr.io/cnyup/service-spread-scheduler/scheduler:latest
           command:
             - /usr/local/bin/kube-scheduler
           args:

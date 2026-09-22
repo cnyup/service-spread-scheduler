@@ -1,4 +1,4 @@
-module gitlab.ttyuyin.com/T5428/service-spread-scheduler
+module github.com/cnyup/service-spread-scheduler
 
 go 1.22
 

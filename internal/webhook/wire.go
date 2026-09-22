@@ -4,7 +4,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	sspv1alpha1 "gitlab.ttyuyin.com/T5428/service-spread-scheduler/api/v1alpha1"
+	sspv1alpha1 "github.com/cnyup/service-spread-scheduler/api/v1alpha1"
 )
 
 // PolicyWebhookPath is the HTTPS path under which the ServiceSpreadPolicy

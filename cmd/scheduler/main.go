@@ -13,7 +13,7 @@ import (
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
-	"gitlab.ttyuyin.com/T5428/service-spread-scheduler/internal/spread"
+	"github.com/cnyup/service-spread-scheduler/internal/spread"
 )
 
 func main() {

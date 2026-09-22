@@ -33,8 +33,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	crwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	sspv1alpha1 "gitlab.ttyuyin.com/T5428/service-spread-scheduler/api/v1alpha1"
-	"gitlab.ttyuyin.com/T5428/service-spread-scheduler/internal/webhook"
+	sspv1alpha1 "github.com/cnyup/service-spread-scheduler/api/v1alpha1"
+	"github.com/cnyup/service-spread-scheduler/internal/webhook"
 )
 
 var (

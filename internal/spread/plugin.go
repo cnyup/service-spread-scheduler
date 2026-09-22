@@ -9,8 +9,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	schedulingv1alpha1 "gitlab.ttyuyin.com/T5428/service-spread-scheduler/api/v1alpha1"
-	configv1alpha1 "gitlab.ttyuyin.com/T5428/service-spread-scheduler/apis/config/v1alpha1"
+	schedulingv1alpha1 "github.com/cnyup/service-spread-scheduler/api/v1alpha1"
+	configv1alpha1 "github.com/cnyup/service-spread-scheduler/apis/config/v1alpha1"
 
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 )

@@ -15,7 +15,7 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	sspconfig "gitlab.ttyuyin.com/T5428/service-spread-scheduler/apis/config/v1alpha1"
+	sspconfig "github.com/cnyup/service-spread-scheduler/apis/config/v1alpha1"
 )
 
 // SharedConfigMapName is the name of the ConfigMap from which both the

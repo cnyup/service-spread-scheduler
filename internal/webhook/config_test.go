@@ -7,7 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	sspconfig "gitlab.ttyuyin.com/T5428/service-spread-scheduler/apis/config/v1alpha1"
+	sspconfig "github.com/cnyup/service-spread-scheduler/apis/config/v1alpha1"
 )
 
 func baseConfigMap(data map[string]string) *corev1.ConfigMap {
