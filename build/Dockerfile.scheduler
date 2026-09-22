@@ -1,0 +1,20 @@
+# Build stage: compile the custom kube-scheduler binary inside the same
+# module, reusing the host go module cache when provided via build-kit.
+FROM golang:1.22-bookworm AS build
+WORKDIR /src
+# Cache-friendly layer ordering: go.mod/go.sum first, then full source.
+COPY go.mod go.sum ./
+ENV GOPROXY=https://goproxy.cn,direct
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -o /out/kube-scheduler ./cmd/scheduler
+
+# Runtime stage: plain debian (distroless lives on gcr.io which is
+# unreachable from the build host); keep non-root.
+FROM docker.io/library/debian:bookworm-slim
+USER 65534:65534
+COPY --from=build /out/kube-scheduler /usr/local/bin/kube-scheduler

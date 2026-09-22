@@ -10,7 +10,7 @@ import (
 // PolicyWebhookPath is the HTTPS path under which the ServiceSpreadPolicy
 // validating webhook is served. It must match the ValidatingWebhookConfiguration
 // in config/webhook/manifests.yaml.
-const PolicyWebhookPath = "/validate-scheduling-soyup-top-v1alpha1-serviceSpreadPolicy"
+const PolicyWebhookPath = "/validate-scheduling-soyup-top-v1alpha1-servicespreadpolicy"
 
 // RegisterPolicyWebhook registers the ServiceSpreadPolicy validating webhook
 // (CREATE/UPDATE) on the manager's webhook server. cfg supplies the shared

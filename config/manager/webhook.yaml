@@ -21,6 +21,7 @@ spec:
       containers:
         - name: webhook
           image: ghcr.io/cnyup/service-spread-scheduler/webhook:latest
+          imagePullPolicy: IfNotPresent
           args:
             - --config-map-namespace=service-spread-system
             - --config-map-name=service-spread-scheduler-config

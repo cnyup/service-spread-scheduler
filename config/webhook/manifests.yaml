@@ -36,5 +36,5 @@ webhooks:
       service:
         name: service-spread-webhook-service
         namespace: service-spread-system
-        path: /validate-scheduling-soyup-top-v1alpha1-serviceSpreadPolicy
+        path: /validate-scheduling-soyup-top-v1alpha1-servicespreadpolicy
         port: 443

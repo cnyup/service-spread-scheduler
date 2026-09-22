@@ -29,6 +29,7 @@ spec:
       containers:
         - name: kube-scheduler
           image: ghcr.io/cnyup/service-spread-scheduler/scheduler:latest
+          imagePullPolicy: IfNotPresent
           command:
             - /usr/local/bin/kube-scheduler
           args:
