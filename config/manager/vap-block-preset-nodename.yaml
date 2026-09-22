@@ -1,0 +1,73 @@
+---
+# Blocks presetting spec.nodeName on pods that request the managed scheduler
+# (design doc 3.2, dev-design §7.2). `spec.nodeName` bypasses every scheduler,
+# so a pod with schedulerName=service-spread-scheduler AND a preset nodeName
+# would escape maxSkew / maxPodsPerNode entirely.
+#
+# Covers CREATE and UPDATE: nodeName can be written after creation via a
+# direct spec PATCH (self-binding), so CREATE-only checks leave that channel
+# open. UPDATEs that merely KEEP an existing nodeName (routine updates by
+# system components on already-bound pods) are allowed via the oldObject
+# comparison; only setting or changing nodeName is denied.
+#
+# Kubernetes 1.28 (target): ValidatingAdmissionPolicy is beta and OFF by
+# default. Enable with, on kube-apiserver:
+#   --feature-gates=ValidatingAdmissionPolicy=true
+#   --runtime-config=admissionregistration.k8s.io/v1beta1=true
+# Kubernetes 1.30+: switch both documents to admissionregistration.k8s.io/v1
+# (drop the runtime-config).
+#
+# The scheduler name literal below must match
+# config/manager/configmap.yaml:data.managedSchedulerName — keep in sync.
+#
+# Trusted-component exceptions (design doc 3.2): none by default. To exempt a
+# migration ServiceAccount, add a matchCondition like:
+#   - name: exclude-trusted-requestors
+#     expression: >-
+#       !(request.userInfo.username in
+#         ['system:serviceaccount:migration:migration-tool'])
+apiVersion: admissionregistration.k8s.io/v1beta1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: service-spread-scheduler-block-preset-nodename
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups:
+          - ""
+        apiVersions:
+          - v1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - pods
+  matchConditions:
+    - name: targets-service-spread-scheduler
+      expression: >-
+        has(object.spec.schedulerName) &&
+        object.spec.schedulerName == 'service-spread-scheduler'
+  validations:
+    # Deny when the incoming pod carries a nodeName that is not simply being
+    # kept unchanged from the old object. On CREATE oldObject is null, so the
+    # short-circuited `request.operation == 'UPDATE' && ...` arm never
+    # evaluates has(oldObject...) on a null reference.
+    - expression: >-
+        !has(object.spec.nodeName) ||
+        (request.operation == 'UPDATE' &&
+         has(oldObject.spec.nodeName) &&
+         oldObject.spec.nodeName == object.spec.nodeName)
+      message: >-
+        presetting spec.nodeName bypasses service-spread-scheduler spread
+        constraints (maxSkew/maxPodsPerNode); remove spec.nodeName and let the
+        scheduler place this pod
+---
+apiVersion: admissionregistration.k8s.io/v1beta1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: service-spread-scheduler-block-preset-nodename
+spec:
+  policyName: service-spread-scheduler-block-preset-nodename
+  validationActions:
+    - Deny

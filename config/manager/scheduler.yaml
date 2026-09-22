@@ -1,0 +1,48 @@
+---
+# Deployment of the custom kube-scheduler binary (dev-design §7.3).
+#
+# M1 STATUS — DO NOT APPLY YET: the ServiceSpread plugin lands in M3; until
+# then the binary is a vanilla kube-scheduler and would reject the example
+# KubeSchedulerConfiguration (unknown plugin "ServiceSpread"). The manifest is
+# complete for M3 use and kept here so config/manager matches the dev-design
+# repository layout.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-spread-scheduler
+  namespace: service-spread-system
+  labels:
+    app: service-spread-scheduler
+spec:
+  # Multiple replicas are safe: all replicas share the SAME leader-election
+  # Lease fixed below (design doc 3.1). Only the leader makes decisions.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: service-spread-scheduler
+  template:
+    metadata:
+      labels:
+        app: service-spread-scheduler
+    spec:
+      serviceAccountName: service-spread-scheduler
+      containers:
+        - name: kube-scheduler
+          image: gitlab.ttyuyin.com/T5428/service-spread-scheduler/scheduler:latest
+          command:
+            - /usr/local/bin/kube-scheduler
+          args:
+            - --config=/etc/kube-scheduler/config.yaml
+            - -v=2
+          volumeMounts:
+            - name: scheduler-config
+              mountPath: /etc/kube-scheduler
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: scheduler-config
+          configMap:
+            name: service-spread-scheduler-kubeconfig

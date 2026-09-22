@@ -1,0 +1,40 @@
+---
+# ValidatingWebhookConfiguration for ServiceSpreadPolicy CREATE/UPDATE:
+# deterministic naming plus static validation (dev-design §7.1).
+#
+# failurePolicy: Fail — if the webhook is down, policy creation fails loudly
+# instead of letting unvalidated policies through.
+#
+# The CA bundle is injected by cert-manager (annotation below); envtest
+# rewrites clientConfig to the local test server automatically.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: service-spread-policy-validator
+  annotations:
+    cert-manager.io/inject-ca-from: service-spread-system/service-spread-webhook-serving-cert
+webhooks:
+  - name: validate.servicespreadpolicy.scheduling.soyup.top
+    admissionReviewVersions:
+      - v1
+    sideEffects: None
+    failurePolicy: Fail
+    rules:
+      - apiGroups:
+          - scheduling.soyup.top
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        # NOTE: resource names in admission rules are case-sensitive and must
+        # match the CRD plural (servicespreadpolicies), not the Kind.
+        resources:
+          - servicespreadpolicies
+        scope: Namespaced
+    clientConfig:
+      service:
+        name: service-spread-webhook-service
+        namespace: service-spread-system
+        path: /validate-scheduling-soyup-top-v1alpha1-serviceSpreadPolicy
+        port: 443

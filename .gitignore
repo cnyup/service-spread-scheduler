@@ -1,0 +1,9 @@
+# Binaries and downloaded envtest assets
+bin/
+
+# Go build output
+*.test
+*.out
+
+# Editor / OS
+.DS_Store

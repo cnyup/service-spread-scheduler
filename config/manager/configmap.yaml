@@ -1,0 +1,16 @@
+---
+# Shared cluster-level configuration for the ServiceSpread scheduler and its
+# webhook (dev-design §7.1). Both Deployments watch this object; the webhook
+# fails closed while it is missing or invalid.
+#
+# serviceLabelKey must equal ServiceSpreadArgs.serviceLabelKey in
+# config/scheduler/kubeconfig.yaml — keep them in sync (kustomize
+# parameterization lands with the M4 deployment hardening).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: service-spread-scheduler-config
+  namespace: service-spread-system
+data:
+  serviceLabelKey: "app.kubernetes.io/name"
+  managedSchedulerName: "service-spread-scheduler"

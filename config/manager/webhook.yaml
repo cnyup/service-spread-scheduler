@@ -1,0 +1,61 @@
+---
+# Deployment of the ServiceSpreadPolicy validating webhook (M1).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-spread-webhook
+  namespace: service-spread-system
+  labels:
+    app: service-spread-webhook
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: service-spread-webhook
+  template:
+    metadata:
+      labels:
+        app: service-spread-webhook
+    spec:
+      serviceAccountName: service-spread-webhook
+      containers:
+        - name: webhook
+          image: gitlab.ttyuyin.com/T5428/service-spread-scheduler/webhook:latest
+          args:
+            - --config-map-namespace=service-spread-system
+            - --config-map-name=service-spread-scheduler-config
+            - --webhook-cert-dir=/tmp/k8s-webhook-server/serving-certs
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+          ports:
+            - name: webhook
+              containerPort: 9443
+            - name: metrics
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz/shared-config
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: serving-cert
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+      volumes:
+        - name: serving-cert
+          secret:
+            secretName: service-spread-webhook-serving-cert

@@ -1,0 +1,48 @@
+---
+# RBAC for the ServiceSpreadPolicy validating webhook (M1).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: service-spread-webhook
+  namespace: service-spread-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: service-spread-webhook
+rules:
+  # Overlap pre-check lists same-namespace policies via the live API
+  # (fail closed on list errors). Resource names are the CRD plural
+  # (lowercase), matching the admission rules in config/webhook/manifests.yaml.
+  - apiGroups:
+      - scheduling.soyup.top
+    resources:
+      - servicespreadpolicies
+    verbs:
+      - get
+      - list
+      - watch
+  # Shared cluster-level configuration (serviceLabelKey / managedSchedulerName).
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    resourceNames:
+      - service-spread-scheduler-config
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: service-spread-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: service-spread-webhook
+subjects:
+  - kind: ServiceAccount
+    name: service-spread-webhook
+    namespace: service-spread-system
