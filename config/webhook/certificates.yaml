@@ -1,0 +1,29 @@
+---
+# Self-signed issuer + serving certificate for the webhook (cert-manager).
+#
+# Production path: cert-manager injects the CA into the
+# ValidatingWebhookConfiguration via the inject-ca-from annotation.
+# e2e path: hack/e2e/bootstrap.sh generates a self-signed cert, creates the
+# secret directly and patches the caBundle — these manifests are NOT applied
+# in e2e (they would fail without the cert-manager CRDs).
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: service-spread-webhook-selfsigned-issuer
+  namespace: service-spread-system
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: service-spread-webhook-serving-cert
+  namespace: service-spread-system
+spec:
+  dnsNames:
+    - service-spread-webhook-service.service-spread-system.svc
+    - service-spread-webhook-service.service-spread-system.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: service-spread-webhook-selfsigned-issuer
+  secretName: service-spread-webhook-serving-cert

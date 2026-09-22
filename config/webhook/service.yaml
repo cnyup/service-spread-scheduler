@@ -1,5 +1,8 @@
 ---
 # Service fronting the ServiceSpreadPolicy validating webhook.
+#
+# Split from the cert-manager Issuer/Certificate manifests (certificates.yaml)
+# so e2e environments without cert-manager can apply just this Service.
 apiVersion: v1
 kind: Service
 metadata:
@@ -12,26 +15,3 @@ spec:
     - name: https
       port: 443
       targetPort: 9443
----
-# Self-signed issuer + serving certificate for the webhook (cert-manager).
-apiVersion: cert-manager.io/v1
-kind: Issuer
-metadata:
-  name: service-spread-webhook-selfsigned-issuer
-  namespace: service-spread-system
-spec:
-  selfSigned: {}
----
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: service-spread-webhook-serving-cert
-  namespace: service-spread-system
-spec:
-  dnsNames:
-    - service-spread-webhook-service.service-spread-system.svc
-    - service-spread-webhook-service.service-spread-system.svc.cluster.local
-  issuerRef:
-    kind: Issuer
-    name: service-spread-webhook-selfsigned-issuer
-  secretName: service-spread-webhook-serving-cert
