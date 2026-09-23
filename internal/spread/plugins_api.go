@@ -120,6 +120,26 @@ func depsFromHandle(ctx context.Context, args configv1alpha1.ServiceSpreadArgs, 
 			sif.Core().V1().Nodes().Informer().HasSynced()
 	}
 
+	// Observer loop (M4): metrics-only goroutine sharing the same
+	// informers (dev-design §9 deviation 4). HPA informer starts via the
+	// shared factory; KEDA dynamic informer only when the group is in
+	// discovery.
+	hpaInform := sif.Autoscaling().V2().HorizontalPodAutoscalers()
+	targets := newInformerTargetSource(
+		hpaInform.Lister(),
+		hpaInform.Informer(),
+		func() (cache.Indexer, cache.InformerSynced, bool) {
+			return newKEDAIndexer(ctx, h.KubeConfig())
+		},
+	)
+	go RunObserverLoop(ctx, ObserverLoopDeps{
+		Deployments:    sif.Apps().V1().Deployments().Lister(),
+		Pods:           sif.Core().V1().Pods().Lister(),
+		TargetSource:   targets,
+		ServiceLabelKey: args.ServiceLabelKey,
+		ExportInterval: 30 * time.Second,
+	})
+
 	return pluginDeps{
 		policies: policies,
 		owners:   owners,
@@ -199,6 +219,29 @@ func (p *policyInformer) List(namespace string) ([]*schedulingv1alpha1.ServiceSp
 		out = append(out, pol)
 	}
 	return out, nil
+}
+
+// newKEDAIndexer builds (indexer, synced, known) for ScaledObjects. known
+// is false (and the rest nil) when the keda.sh group is absent from
+// discovery — the observer then reports "not managed" without error. The
+// dynamic informer runs for the process lifetime, mirroring the policy
+// informer pattern above.
+func newKEDAIndexer(ctx context.Context, cfg *rest.Config) (cache.Indexer, cache.InformerSynced, bool) {
+	dyn, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return nil, nil, false
+	}
+	groups, err := dyn.Resource(scaledObjectGVR).List(ctx, metav1.ListOptions{Limit: 1})
+	if err != nil {
+		// Not registered (or no RBAC): treat as absent; degraded-vs-absent
+		// refinement lands with the M4 alerting pass.
+		return nil, nil, false
+	}
+	_ = groups
+	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dyn, 30*time.Minute, metav1.NamespaceAll, nil)
+	inf := factory.ForResource(scaledObjectGVR).Informer()
+	go inf.Run(ctx.Done())
+	return inf.GetIndexer(), inf.HasSynced, true
 }
 
 // ---- owner chain reader ----

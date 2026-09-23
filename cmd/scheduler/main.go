@@ -10,6 +10,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/component-base/cli"
+	"k8s.io/klog/v2"
+	"net/http"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
@@ -17,6 +20,17 @@ import (
 )
 
 func main() {
+	// M4 observer metrics: plain HTTP endpoint for the observer gauges on
+	// the default prometheus registry (plugin counters included). Runs in
+	// every replica; scraping can be leader-agnostic.
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(":9100", mux); err != nil {
+			klog.Background().Error(err, "observer metrics server")
+		}
+	}()
+
 	command := app.NewSchedulerCommand(
 		app.WithPlugin(spread.Name, func(configuration runtime.Object, h framework.Handle) (framework.Plugin, error) {
 			// The 1.28 plugin factory carries no context; informers owned

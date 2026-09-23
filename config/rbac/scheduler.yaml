@@ -42,6 +42,10 @@ rules:
   - apiGroups: ["apps"]
     resources: [replicasets, deployments, statefulsets]
     verbs: [get, list, watch]
+  # M4 observer: HPA informer (autoscaling/v2).
+  - apiGroups: ["autoscaling"]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
   # Custom GVK enqueue hints use metadata only; covered by the watches above.
   # Events for scheduling diagnostics are emitted by kube-scheduler itself
   # (system: kube-scheduler), not by this plugin — no Events verb needed.

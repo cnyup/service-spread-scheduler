@@ -39,6 +39,9 @@ spec:
             - name: scheduler-config
               mountPath: /etc/kube-scheduler
               readOnly: true
+          ports:
+            - name: observer-metrics
+              containerPort: 9100
           resources:
             requests:
               cpu: 100m

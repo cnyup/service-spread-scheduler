@@ -8,7 +8,11 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/cache"
+	listersautoscalingv2 "k8s.io/client-go/listers/autoscaling/v2"
 )
 
 // ---- fakes for the observer's read surface ----
@@ -19,14 +23,14 @@ type fakeTargetSource struct {
 	errs map[string]error                                    // key: deployment name -> read error
 }
 
-func (f *fakeTargetSource) HPAsFor(dep string) ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
+func (f *fakeTargetSource) HPAsFor(_ string, dep string) ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
 	if err, ok := f.errs["hpa:"+dep]; ok {
 		return nil, err
 	}
 	return f.hpas[dep], nil
 }
 
-func (f *fakeTargetSource) ScaledObjectMinReplicas(dep string) (int32, bool, error) {
+func (f *fakeTargetSource) ScaledObjectMinReplicas(_ string, dep string) (int32, bool, error) {
 	if err, ok := f.errs["so:"+dep]; ok {
 		return 0, false, err
 	}
@@ -191,5 +195,81 @@ func TestObserveCycle_ProducesDomainSeries(t *testing.T) {
 	}
 	if s.Namespace != "ns1" || s.Service != "svc-a" {
 		t.Fatalf("labels wrong: %+v", s)
+	}
+}
+
+// ---- informerTargetSource (production source) ----
+
+func newTestInformerSource(t *testing.T, hpas []*autoscalingv2.HorizontalPodAutoscaler, soIndexer cache.Indexer, soSynced cache.InformerSynced, kedaKnown bool) *informerTargetSource {
+	t.Helper()
+	hpaIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	for _, h := range hpas {
+		if err := hpaIndexer.Add(h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hpaLister := listersautoscalingv2.NewHorizontalPodAutoscalerLister(hpaIndexer)
+	return newInformerTargetSource(hpaLister, nil, func() (cache.Indexer, cache.InformerSynced, bool) {
+		return soIndexer, soSynced, kedaKnown
+	})
+}
+
+func mkScaledObject(ns, name, target string, min int64) *unstructured.Unstructured {
+	so := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "keda.sh/v1alpha1",
+			"kind":       "ScaledObject",
+			"metadata":   map[string]interface{}{"namespace": ns, "name": name},
+			"spec": map[string]interface{}{
+				"scaleTargetRef": map[string]interface{}{"kind": "Deployment", "name": target},
+				"minReplicaCount": min,
+			},
+		},
+	}
+	so.SetGroupVersionKind(schema.GroupVersionKind{Group: "keda.sh", Version: "v1alpha1", Kind: "ScaledObject"})
+	return so
+}
+
+func TestInformerSource_HPAMatchByScaleTargetRef(t *testing.T) {
+	hpas := []*autoscalingv2.HorizontalPodAutoscaler{
+		mkHPA("h1", "web", 5, 10),
+		mkHPA("h2", "other", 3, 8), // different target: must NOT match
+	}
+	src := newTestInformerSource(t, hpas, nil, nil, false)
+	got, err := src.HPAsFor("ns1", "web")
+	if err != nil || len(got) != 1 || got[0].Name != "h1" {
+		t.Fatalf("want exactly h1, got %v err=%v", got, err)
+	}
+}
+
+func TestInformerSource_KEDAAbsent_GroupNotInDiscovery(t *testing.T) {
+	src := newTestInformerSource(t, nil, nil, nil, false)
+	min, managed, err := src.ScaledObjectMinReplicas("ns1", "web")
+	if managed || err != nil || min != 0 {
+		t.Fatalf("absent KEDA: want (0,false,nil), got (%d,%v,%v)", min, managed, err)
+	}
+}
+
+func TestInformerSource_KEDAPresent_MatchesByScaleTargetRef(t *testing.T) {
+	idx := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	if err := idx.Add(mkScaledObject("ns1", "so1", "web", 2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Add(mkScaledObject("ns1", "so2", "other", 9)); err != nil {
+		t.Fatal(err)
+	}
+	src := newTestInformerSource(t, nil, idx, func() bool { return true }, true)
+	min, managed, err := src.ScaledObjectMinReplicas("ns1", "web")
+	if err != nil || !managed || min != 2 {
+		t.Fatalf("want (2,true,nil), got (%d,%v,%v)", min, managed, err)
+	}
+}
+
+func TestInformerSource_KEDANotSynced_IsDegraded(t *testing.T) {
+	idx := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	src := newTestInformerSource(t, nil, idx, func() bool { return false }, true)
+	_, _, err := src.ScaledObjectMinReplicas("ns1", "web")
+	if err == nil {
+		t.Fatalf("unsynced KEDA cache must surface degraded error, got nil")
 	}
 }

@@ -1,12 +1,23 @@
 package spread
 
 import (
+	"context"
+	"fmt"
 	"sync"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
-	"github.com/prometheus/client_golang/prometheus"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/cache"
+	listersappsv1 "k8s.io/client-go/listers/apps/v1"
+	listerscorev1 "k8s.io/client-go/listers/core/v1"
+	listersautoscalingv2 "k8s.io/client-go/listers/autoscaling/v2"
+	"k8s.io/klog/v2"
 )
 
 // Replica-target observer (dev-design §6; design doc §6/§10.3): metrics
@@ -33,16 +44,17 @@ type deploymentTarget struct {
 
 // TargetSource is the read surface the observer needs for HPA/KEDA data.
 // Implementations wrap informer listers (production) or fakes (tests).
-// KEDA is consumed through a minimal projection: ScaledObjectMinReplicas
-// reports (minReplicaCount, managed) for the ScaledObject whose
-// scaleTargetRef matches the deployment.
+// All resources are namespaced: callers pass the DEPLOYMENT's namespace.
 type TargetSource interface {
-	// HPAsFor returns the HPAs whose scaleTargetRef points at the
-	// deployment (nil/empty when none).
-	HPAsFor(deployment string) ([]*autoscalingv2.HorizontalPodAutoscaler, error)
+	// HPAsFor returns the HPAs whose scaleTargetRef points at the named
+	// deployment in the same namespace (nil/empty when none).
+	HPAsFor(namespace, deployment string) ([]*autoscalingv2.HorizontalPodAutoscaler, error)
 	// ScaledObjectMinReplicas returns (minReplicaCount, true, nil) when a
-	// KEDA ScaledObject targets the deployment.
-	ScaledObjectMinReplicas(deployment string) (int32, bool, error)
+	// KEDA ScaledObject targets the deployment. Implementations decide
+	// "KEDA absent" (group not in discovery -> not managed, nil error)
+	// versus "degraded" (registered but unreadable -> error) — dev-design
+	// §6: degraded must not silently read as absent.
+	ScaledObjectMinReplicas(namespace, deployment string) (int32, bool, error)
 }
 
 // DomainSeries is one exported sample per (namespace, service, domain).
@@ -94,7 +106,7 @@ func resolveDeploymentTarget(dep *appsv1.Deployment, src TargetSource, lastGood 
 		replicas = *dep.Spec.Replicas
 	}
 
-	hpas, hpaErr := src.HPAsFor(dep.Name)
+	hpas, hpaErr := src.HPAsFor(dep.Namespace, dep.Name)
 	if hpaErr == nil {
 		if len(hpas) > 0 {
 			maxDesired := int32(-1)
@@ -116,7 +128,7 @@ func resolveDeploymentTarget(dep *appsv1.Deployment, src TargetSource, lastGood 
 		}
 	}
 
-	if min, managed, soErr := src.ScaledObjectMinReplicas(dep.Name); soErr == nil && managed {
+	if min, managed, soErr := src.ScaledObjectMinReplicas(dep.Namespace, dep.Name); soErr == nil && managed {
 		v := replicas
 		if min > v {
 			v = min
@@ -270,5 +282,153 @@ func (o *ReplicaTargetObserver) ExportSeries(series []DomainSeries) {
 			f = 1.0
 		}
 		fallbackActive.WithLabelValues(s.Namespace, s.Service, s.Domain).Set(f)
+	}
+}
+
+// ---- production TargetSource ----
+
+// informerTargetSource serves TargetSource from shared informer caches.
+// KEDA ScaledObjects are consumed via a dynamic informer; KEDA-absence is
+// decided once via discovery and surfaces as "not managed" (no error), a
+// registered-but-broken group surfaces as degraded (error).
+type informerTargetSource struct {
+	hpas listersautoscalingv2.HorizontalPodAutoscalerLister
+
+	soIndexer    cache.Indexer // *unstructured.Unstructured ScaledObjects
+	soSynced     cache.InformerSynced
+	kedaKnown    func() bool // discovery probe: keda.sh group registered?
+}
+
+// scaledObjectGVR is the KEDA CRD reference (keda.sh/v1alpha1).
+var scaledObjectGVR = schema.GroupVersionResource{
+	Group:    "keda.sh",
+	Version:  "v1alpha1",
+	Resource: "scaledobjects",
+}
+
+// newInformerTargetSource builds the production source. hpaInformer must be
+// started by the caller (shared informer factory). When the KEDA group is
+// absent from discovery the dynamic informer is not created at all and
+// ScaledObjectMinReplicas always reports "not managed" without error.
+func newInformerTargetSource(
+	hpas listersautoscalingv2.HorizontalPodAutoscalerLister,
+	hpaInformer cache.SharedIndexInformer,
+	kedaLister func() (cache.Indexer, cache.InformerSynced, bool),
+) *informerTargetSource {
+	src := &informerTargetSource{hpas: hpas, kedaKnown: func() bool { return false }}
+	_ = hpaInformer // started by the shared factory; lister reads the cache
+	if idx, synced, ok := kedaLister(); ok && idx != nil {
+		src.soIndexer = idx
+		src.soSynced = synced
+		src.kedaKnown = func() bool { return true }
+	}
+	return src
+}
+
+// HPAsFor matches scaleTargetRef Kind=Deployment Name=<deployment> within
+// the namespace (design 6.2: multiple HPAs on one target take the max).
+func (s *informerTargetSource) HPAsFor(namespace, deployment string) ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
+	all, err := s.hpas.HorizontalPodAutoscalers(namespace).List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*autoscalingv2.HorizontalPodAutoscaler, 0, len(all))
+	for _, h := range all {
+		ref := h.Spec.ScaleTargetRef
+		if ref.Kind == "Deployment" && ref.Name == deployment {
+			out = append(out, h)
+		}
+	}
+	return out, nil
+}
+
+// ScaledObjectMinReplicas reports the minReplicaCount of the ScaledObject
+// targeting the deployment. keda.sh not in discovery -> (0,false,nil).
+// Cache not yet synced -> (0,false,degraded-error).
+func (s *informerTargetSource) ScaledObjectMinReplicas(namespace, deployment string) (int32, bool, error) {
+	if !s.kedaKnown() {
+		return 0, false, nil
+	}
+	if s.soSynced != nil && !s.soSynced() {
+		return 0, false, fmt.Errorf("scaledobject informer not synced (degraded)")
+	}
+	objs, err := s.soIndexer.ByIndex(cache.NamespaceIndex, namespace)
+	if err != nil {
+		return 0, false, fmt.Errorf("scaledobject list %s: %w", namespace, err)
+	}
+	for _, o := range objs {
+		u, ok := o.(*unstructured.Unstructured)
+		if !ok {
+			continue
+		}
+		kind, _, _ := unstructured.NestedString(u.Object, "spec", "scaleTargetRef", "kind")
+		name, _, _ := unstructured.NestedString(u.Object, "spec", "scaleTargetRef", "name")
+		if kind != "Deployment" || name != deployment {
+			continue
+		}
+		min, found, err := unstructured.NestedInt64(u.Object, "spec", "minReplicaCount")
+		if err != nil || !found {
+			return 0, true, nil // managed; unset minReplicaCount defaults to 0
+		}
+		if min < 0 {
+			min = 0
+		}
+		return int32(min), true, nil
+	}
+	return 0, false, nil
+}
+
+// ---- observation loop ----
+
+// ObserverLoopDeps feeds the periodic Compute cycle from informer caches.
+type ObserverLoopDeps struct {
+	Deployments listersappsv1.DeploymentLister
+	Pods        listerscorev1.PodLister
+	TargetSource
+	ServiceLabelKey string
+	ExportInterval time.Duration
+}
+
+// RunObserverLoop resolves services -> series on a ticker until ctx ends.
+// One goroutine per process (started in depsFromHandle); leader/follower
+// both export: metrics are local gauges, exporting is side-effect free.
+func RunObserverLoop(ctx context.Context, d ObserverLoopDeps) {
+	ob := NewReplicaTargetObserver(ObserverDeps{
+		ServiceLabelKey: d.ServiceLabelKey,
+		Targets:         d.TargetSource,
+	})
+	interval := d.ExportInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	export := func() {
+		deps, err := d.Deployments.List(labels.Everything())
+		if err != nil {
+			klog.Background().Error(err, "observer: list deployments")
+			return
+		}
+		svcOf := make(map[string]string, len(deps))
+		for _, dep := range deps {
+			if v, ok := dep.Spec.Template.Labels[d.ServiceLabelKey]; ok {
+				svcOf[dep.Namespace+"/"+dep.Name] = v
+			}
+		}
+		pods, err := d.Pods.List(labels.Everything())
+		if err != nil {
+			klog.Background().Error(err, "observer: list pods")
+			return
+		}
+		ob.ExportSeries(ob.Compute(deps, svcOf, pods))
+	}
+	export() // first cycle immediately at startup
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			export()
+		}
 	}
 }
