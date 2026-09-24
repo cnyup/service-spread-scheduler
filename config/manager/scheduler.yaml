@@ -1,11 +1,20 @@
 ---
-# Deployment of the custom kube-scheduler binary (dev-design §7.3).
+# Deployment of the custom kube-spread-scheduler binary (dev-design §7.3).
 #
-# M1 STATUS — DO NOT APPLY YET: the ServiceSpread plugin lands in M3; until
-# then the binary is a vanilla kube-scheduler and would reject the example
-# KubeSchedulerConfiguration (unknown plugin "ServiceSpread"). The manifest is
-# complete for M3 use and kept here so config/manager matches the dev-design
-# repository layout.
+# Production notes (M4):
+# - image tag: the manifest defaults to :latest for the kind e2e flow; for
+#   production override it with a release tag or digest, e.g.
+#     kubectl apply -f - < <(sed 's/:latest/:v0.1.0/' config/manager/scheduler.yaml)
+#   or use kustomize images: transformer in your overlay.
+# - resources: kube-scheduler + plugin informers on small clusters fit in
+#   100m-500m CPU / 128-384Mi. The limit leaves headroom for leader
+#   election jitters and informer list bursts; raise for 1000+ node
+#   clusters.
+# - probes: kube-scheduler serves ONLY /healthz on :10259 by default
+#   (verified on 1.28: /readyz and /livez return 404 unless extra
+#   component-config flags enable them). Both probes use /healthz; it
+#   gates the endpoint, NOT leader status — a follower is Ready by
+#   design. timeoutSeconds 5: first TLS handshake can be slow.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,7 +24,8 @@ metadata:
     app: service-spread-scheduler
 spec:
   # Multiple replicas are safe: all replicas share the SAME leader-election
-  # Lease fixed below (design doc 3.1). Only the leader makes decisions.
+  # Lease fixed below (design doc 3.1). Only the leader makes decisions;
+  # followers keep informers warm and the observer metrics endpoint up.
   replicas: 2
   selector:
     matchLabels:
@@ -26,6 +36,15 @@ spec:
         app: service-spread-scheduler
     spec:
       serviceAccountName: service-spread-scheduler
+      # Keep one replica per node during normal operation so a single
+      # node failure does not take both the leader and its warm standby.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: service-spread-scheduler
       containers:
         - name: kube-scheduler
           image: ghcr.io/cnyup/service-spread-scheduler/scheduler:latest
@@ -40,13 +59,48 @@ spec:
               mountPath: /etc/kube-scheduler
               readOnly: true
           ports:
-            - name: observer-metrics
+            - name: obs-metrics
               containerPort: 9100
+            - name: health
+              containerPort: 10259
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 10259
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 10259
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
           resources:
             requests:
               cpu: 100m
               memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
       volumes:
         - name: scheduler-config
           configMap:
             name: service-spread-scheduler-kubeconfig
+---
+# PDB: at least one scheduler replica survives node drains / voluntary
+# disruption. The leader lease re-elects within leaseDuration (15s) if
+# the leader pod is the one evicted.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: service-spread-scheduler
+  namespace: service-spread-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: service-spread-scheduler

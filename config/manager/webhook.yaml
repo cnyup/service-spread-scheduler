@@ -60,3 +60,17 @@ spec:
         - name: serving-cert
           secret:
             secretName: service-spread-webhook-serving-cert
+---
+# PDB: keep one webhook serving during node drains — policy admission is
+# fail-closed, losing ALL webhook pods blocks ServiceSpreadPolicy writes
+# (existing scheduling keeps working, see chaos drill c4).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: service-spread-webhook
+  namespace: service-spread-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: service-spread-webhook
