@@ -6,17 +6,18 @@ import (
 	"sync"
 	"time"
 
+	schedulingv1alpha1 "github.com/cnyup/service-spread-scheduler/api/v1alpha1"
 	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/tools/cache"
 	listersappsv1 "k8s.io/client-go/listers/apps/v1"
-	listerscorev1 "k8s.io/client-go/listers/core/v1"
 	listersautoscalingv2 "k8s.io/client-go/listers/autoscaling/v2"
+	listerscorev1 "k8s.io/client-go/listers/core/v1"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 )
 
@@ -28,11 +29,11 @@ import (
 type targetSource string
 
 const (
-	targetSourceHPA         targetSource = "hpa"
+	targetSourceHPA          targetSource = "hpa"
 	targetSourceKEDAFallback targetSource = "kedaFallback"
-	targetSourceDeployment  targetSource = "deployment"
-	targetSourceLastGood    targetSource = "lastGood"
-	targetSourceFallback    targetSource = "ReplicaTargetFallback"
+	targetSourceDeployment   targetSource = "deployment"
+	targetSourceLastGood     targetSource = "lastGood"
+	targetSourceFallback     targetSource = "ReplicaTargetFallback"
 )
 
 // deploymentTarget is the resolved (value, provenance) pair of one
@@ -66,6 +67,7 @@ type DomainSeries struct {
 	ObservedPods    int32 // Pending+Running incl. unbound
 	BoundPods       int32 // bound-node count total
 	FallbackActive  bool  // reason=ReplicaTargetFallback on any component
+	CapacityDeficit int32 // HPA maxReplicas − eligibleNodes×maxPodsPerNode, floored at 0 (design 10.3); exported only when computable
 }
 
 // ObserverDeps carries observer configuration (mirrors ServiceSpreadArgs
@@ -73,6 +75,11 @@ type DomainSeries struct {
 type ObserverDeps struct {
 	ServiceLabelKey string
 	Targets         TargetSource
+	// Nodes and Policies enable the capacity-deficit export (design doc
+	// 10.3); when either is nil the deficit is skipped entirely.
+	Nodes                NodeReader
+	Policies             PolicyReader
+	ManagedSchedulerName string
 }
 
 // ReplicaTargetObserver resolves deployment targets and aggregates domain
@@ -172,6 +179,16 @@ func capacityDeficit(hpaMax int32, eligibleNodes int32, maxPodsPerNode int32) in
 	return d
 }
 
+// svcAgg is the per-service aggregation state of one Compute round.
+type svcAgg struct {
+	desired  int32
+	observed int32
+	bound    int32
+	fallback bool
+	hpaMax   int32 // max HPA MaxReplicas over the service's deployments; 0 = none
+	deps     []*appsv1.Deployment
+}
+
 // Compute resolves every deployment, groups pods to (namespace, service)
 // via svcOf (deployment key -> service label value), and produces one
 // DomainSeries per service. Pods are Pending+Running (bound or not) and
@@ -184,12 +201,6 @@ func (o *ReplicaTargetObserver) Compute(
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	type svcAgg struct {
-		desired   int32
-		observed  int32
-		bound     int32
-		fallback  bool
-	}
 	aggs := map[string]*svcAgg{}
 	nsOf := map[string]string{}
 
@@ -208,6 +219,16 @@ func (o *ReplicaTargetObserver) Compute(
 		if src == targetSourceFallback || src == targetSourceLastGood {
 			aggs[key].fallback = true
 		}
+		// Track the deployment's HPA ceiling for the capacity deficit
+		// (max over multiple HPAs, mirroring resolveDeploymentTarget).
+		if hpas, err := o.deps.Targets.HPAsFor(dep.Namespace, dep.Name); err == nil {
+			for _, h := range hpas {
+				if h.Spec.MaxReplicas > aggs[key].hpaMax {
+					aggs[key].hpaMax = h.Spec.MaxReplicas
+				}
+			}
+		}
+		aggs[key].deps = append(aggs[key].deps, dep)
 	}
 
 	for _, p := range pods {
@@ -230,17 +251,70 @@ func (o *ReplicaTargetObserver) Compute(
 
 	series := make([]DomainSeries, 0, len(aggs))
 	for key, a := range aggs {
+		svc := key[len(nsOf[key])+1:]
+		var deficit int32
+		if o.deps.Nodes != nil && o.deps.Policies != nil {
+			deficit = o.capacityDeficitFor(nsOf[key], svc, a)
+		}
 		series = append(series, DomainSeries{
-			Namespace:      nsOf[key],
-			Service:        key[len(nsOf[key])+1:],
-			Domain:         "default", // single-domain until multi-domain export lands (§6 detail metric)
-			ReplicaTarget:  aggregateDomain(a.desired, a.observed),
-			ObservedPods:   a.observed,
-			BoundPods:      a.bound,
-			FallbackActive: a.fallback,
+			Namespace:       nsOf[key],
+			Service:         svc,
+			Domain:          "default", // single-domain until multi-domain export lands (§6 detail metric)
+			ReplicaTarget:   aggregateDomain(a.desired, a.observed),
+			ObservedPods:    a.observed,
+			BoundPods:       a.bound,
+			FallbackActive:  a.fallback,
+			CapacityDeficit: deficit,
 		})
 	}
 	return series
+}
+
+// capacityDeficitFor implements design doc 10.3: HPA maxReplicas minus the
+// node union (per-deployment stable constraints) times maxPodsPerNode,
+// floored at 0. Returns 0 (no export) when the policy is missing/ambiguous
+// or no HPA bounds the service — absence of data is not a deficit.
+func (o *ReplicaTargetObserver) capacityDeficitFor(namespace, service string, a *svcAgg) int32 {
+	if a.hpaMax <= 0 {
+		return 0
+	}
+	policies, err := o.deps.Policies.List(namespace)
+	if err != nil {
+		klog.Background().Error(err, "observer: list policies for capacity deficit", "namespace", namespace)
+		return 0
+	}
+	var policy *schedulingv1alpha1.ServiceSpreadPolicy
+	for _, p := range policies {
+		if p.Spec.SchedulerName != o.deps.ManagedSchedulerName {
+			continue
+		}
+		if selectorMatchesService(p.Spec.ServiceSelector, o.deps.ServiceLabelKey, service) {
+			if policy != nil {
+				return 0 // ambiguous: same fail-closed rule as resolvePolicy
+			}
+			policy = p
+		}
+	}
+	if policy == nil {
+		return 0
+	}
+	// Node union over the service's deployments: a node counts when it is
+	// inside the stable domain of ANY deployment's pod template.
+	nodes, err := o.deps.Nodes.List()
+	if err != nil {
+		klog.Background().Error(err, "observer: list nodes for capacity deficit")
+		return 0
+	}
+	union := map[string]struct{}{}
+	for _, dep := range a.deps {
+		synth := &corev1.Pod{Spec: dep.Spec.Template.Spec}
+		for _, n := range nodes {
+			if nodeInStableDomain(synth, n) {
+				union[n.Name] = struct{}{}
+			}
+		}
+	}
+	return capacityDeficit(a.hpaMax, int32(len(union)), policy.Spec.MaxPodsPerNode)
 }
 
 // Observer metrics (label names follow design doc 10.2).
@@ -282,6 +356,9 @@ func (o *ReplicaTargetObserver) ExportSeries(series []DomainSeries) {
 			f = 1.0
 		}
 		fallbackActive.WithLabelValues(s.Namespace, s.Service, s.Domain).Set(f)
+		if s.CapacityDeficit > 0 {
+			capacityDeficitGauge.WithLabelValues(s.Namespace, s.Service).Set(float64(s.CapacityDeficit))
+		}
 	}
 }
 
@@ -294,9 +371,9 @@ func (o *ReplicaTargetObserver) ExportSeries(series []DomainSeries) {
 type informerTargetSource struct {
 	hpas listersautoscalingv2.HorizontalPodAutoscalerLister
 
-	soIndexer    cache.Indexer // *unstructured.Unstructured ScaledObjects
-	soSynced     cache.InformerSynced
-	kedaKnown    func() bool // discovery probe: keda.sh group registered?
+	soIndexer cache.Indexer // *unstructured.Unstructured ScaledObjects
+	soSynced  cache.InformerSynced
+	kedaKnown func() bool // discovery probe: keda.sh group registered?
 }
 
 // scaledObjectGVR is the KEDA CRD reference (keda.sh/v1alpha1).
@@ -386,7 +463,12 @@ type ObserverLoopDeps struct {
 	Pods        listerscorev1.PodLister
 	TargetSource
 	ServiceLabelKey string
-	ExportInterval time.Duration
+	ExportInterval  time.Duration
+	// Nodes + Policies + ManagedSchedulerName enable the capacity-deficit
+	// export (design 10.3); nil Nodes/Policies skips it.
+	Nodes                NodeReader
+	Policies             PolicyReader
+	ManagedSchedulerName string
 }
 
 // RunObserverLoop resolves services -> series on a ticker until ctx ends.
@@ -394,8 +476,11 @@ type ObserverLoopDeps struct {
 // both export: metrics are local gauges, exporting is side-effect free.
 func RunObserverLoop(ctx context.Context, d ObserverLoopDeps) {
 	ob := NewReplicaTargetObserver(ObserverDeps{
-		ServiceLabelKey: d.ServiceLabelKey,
-		Targets:         d.TargetSource,
+		ServiceLabelKey:      d.ServiceLabelKey,
+		Targets:              d.TargetSource,
+		Nodes:                d.Nodes,
+		Policies:             d.Policies,
+		ManagedSchedulerName: d.ManagedSchedulerName,
 	})
 	interval := d.ExportInterval
 	if interval <= 0 {

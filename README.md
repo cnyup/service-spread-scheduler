@@ -109,6 +109,36 @@ spec:
 EOF
 ```
 
+## Monitoring
+
+The scheduler process exports Prometheus metrics on `:9100/metrics` (see `cmd/scheduler/main.go`). The observer loop resolves every deployment's replica target (HPA → KEDA fallback → deployment replicas, with lastGood protection) and exports one series per (namespace, service, domain) every 30s.
+
+**Observer metrics** (`internal/spread/replicatarget.go`):
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `service_spread_replica_target` | namespace, service, domain | Reported replica target with protective floor `max(desired, observedPods)` |
+| `service_spread_observed_pods` | namespace, service, domain | Pending+Running pods of the service (incl. unbound) |
+| `service_spread_bound_pods` | namespace, service, domain | Pods bound to nodes |
+| `service_spread_fallback_active` | namespace, service, domain | 1 when any replica-target component fell back (ReplicaTargetFallback or lastGood) |
+| `service_spread_capacity_deficit` | namespace, service | `HPA maxReplicas − eligibleNodes × maxPodsPerNode`, floored at 0; exported only when an HPA and an unambiguous policy exist for the service |
+
+**Plugin metrics** (`internal/spread/plugin.go`):
+
+| Metric | Labels | Meaning |
+| --- | --- | --- |
+| `service_spread_filter_rejections_total` | reason | PreFilter/Filter rejections by reason (`ServiceSpreadConstraint`, …) |
+| `service_spread_policy_resolution_failures_total` | reason | Policy resolution failures (`MissingRequiredServiceLabel`, `ServiceSpreadPolicyNotFound`, …) |
+
+**Alerting** — `config/monitoring/prometheusrule.yaml` ships four rules matching the design doc (§10.3/§12.2):
+
+- `ServiceSpreadCapacityDeficit` (warning): HPA maxReplicas exceeds what the eligible-node union can host at `maxPodsPerNode` — scaling up would leave pods permanently Pending.
+- `ServiceSpreadReplicaTargetFallback` (warning): replica-target reads fell back (HPA/KEDA unreadable, or lastGood) for 10m — the observer is running on degraded data.
+- `ServiceSpreadFilterRejectionRate` (warning): filter rejections sustained above 0.5/s for 10m — pods are systematically unschedulable under current spread constraints.
+- `ServiceSpreadObserverMetricsStale` (critical): `service_spread_replica_target` absent for 10m — the observer loop or the metrics endpoint is down.
+
+Note: prometheus-operator loads the PrometheusRule only when its `ruleSelector` matches the object's labels — adjust `release: kube-prometheus-stack` to your setup. `hack/e2e/verify-observer.sh` validates the export path end-to-end on a kind cluster (rebuild → rollout → port-forward → metric assertions).
+
 ## Toolchain notes
 
 - `controller-gen` is pinned to **v0.16.5**: the 1.28-era v0.13.0 no longer

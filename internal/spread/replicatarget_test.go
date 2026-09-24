@@ -4,15 +4,18 @@ import (
 	"errors"
 	"testing"
 
+	schedulingv1alpha1 "github.com/cnyup/service-spread-scheduler/api/v1alpha1"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/cache"
 	listersautoscalingv2 "k8s.io/client-go/listers/autoscaling/v2"
+	"k8s.io/client-go/tools/cache"
 )
 
 // ---- fakes for the observer's read surface ----
@@ -221,7 +224,7 @@ func mkScaledObject(ns, name, target string, min int64) *unstructured.Unstructur
 			"kind":       "ScaledObject",
 			"metadata":   map[string]interface{}{"namespace": ns, "name": name},
 			"spec": map[string]interface{}{
-				"scaleTargetRef": map[string]interface{}{"kind": "Deployment", "name": target},
+				"scaleTargetRef":  map[string]interface{}{"kind": "Deployment", "name": target},
 				"minReplicaCount": min,
 			},
 		},
@@ -271,5 +274,97 @@ func TestInformerSource_KEDANotSynced_IsDegraded(t *testing.T) {
 	_, _, err := src.ScaledObjectMinReplicas("ns1", "web")
 	if err == nil {
 		t.Fatalf("unsynced KEDA cache must surface degraded error, got nil")
+	}
+}
+
+// ---- capacity deficit export (design 10.3) ----
+
+type fakeNodeReader struct{ nodes []*v1.Node }
+
+func (f fakeNodeReader) List() ([]*v1.Node, error) { return f.nodes, nil }
+
+func mkDepWithTemplate(name string, replicas int32) *appsv1.Deployment {
+	d := mkDep(name, replicas)
+	d.Spec.Template.Spec = corev1.PodSpec{} // empty constraints match all ready nodes
+	return d
+}
+
+func mkPolicy(ns, svc string, maxPods int32) *schedulingv1alpha1.ServiceSpreadPolicy {
+	return &schedulingv1alpha1.ServiceSpreadPolicy{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "ssp-test"},
+		Spec: schedulingv1alpha1.ServiceSpreadPolicySpec{
+			SchedulerName:   "service-spread-scheduler",
+			ServiceSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": svc}},
+			MaxPodsPerNode:  maxPods,
+		},
+	}
+}
+
+func TestCompute_ExportsCapacityDeficit(t *testing.T) {
+	// 2 ready nodes, policy maxPodsPerNode=2, HPA max=5 -> deficit = 5 - 2*2 = 1.
+	src := &fakeTargetSource{hpas: map[string][]*autoscalingv2.HorizontalPodAutoscaler{
+		"d1": {mkHPA("h1", "d1", 4, 5)},
+	}}
+	ob := NewReplicaTargetObserver(ObserverDeps{
+		ServiceLabelKey: "app.kubernetes.io/name",
+		Targets:         src,
+		Nodes:           fakeNodeReader{[]*v1.Node{domNode("n1"), domNode("n2")}},
+		Policies: &fakePolicies{items: []*schedulingv1alpha1.ServiceSpreadPolicy{
+			mkPolicy("ns1", "svc-a", 2),
+		}},
+		ManagedSchedulerName: "service-spread-scheduler",
+	})
+	deps := []*appsv1.Deployment{mkDepWithTemplate("d1", 4)}
+	series := ob.Compute(deps, map[string]string{"ns1/d1": "svc-a"}, nil)
+	if len(series) != 1 {
+		t.Fatalf("want 1 series, got %d", len(series))
+	}
+	if series[0].CapacityDeficit != 1 {
+		t.Fatalf("want deficit=1 (5 - 2*2), got %d", series[0].CapacityDeficit)
+	}
+	// The gauge must actually receive the value — this is the dead-letter
+	// fix: registered-but-never-exported made the alert rule unreachable.
+	ob.ExportSeries(series)
+	if v := testutil.ToFloat64(capacityDeficitGauge.WithLabelValues("ns1", "svc-a")); v != 1 {
+		t.Fatalf("gauge not exported: want 1, got %v", v)
+	}
+}
+
+func TestCompute_CapacityDeficitZeroWhenNoHPA(t *testing.T) {
+	// No HPA: max is deployment replicas (4), 2 nodes x 2 pods -> deficit 0.
+	ob := NewReplicaTargetObserver(ObserverDeps{
+		ServiceLabelKey: "app.kubernetes.io/name",
+		Targets:         &fakeTargetSource{},
+		Nodes:           fakeNodeReader{[]*v1.Node{domNode("n1"), domNode("n2")}},
+		Policies: &fakePolicies{items: []*schedulingv1alpha1.ServiceSpreadPolicy{
+			mkPolicy("ns1", "svc-a", 2),
+		}},
+		ManagedSchedulerName: "service-spread-scheduler",
+	})
+	deps := []*appsv1.Deployment{mkDepWithTemplate("d1", 4)}
+	series := ob.Compute(deps, map[string]string{"ns1/d1": "svc-a"}, nil)
+	if len(series) != 1 || series[0].CapacityDeficit != 0 {
+		t.Fatalf("want deficit=0 (4 - 2*2), got %+v", series)
+	}
+}
+
+func TestCompute_CapacityDeficitSkippedWithoutPolicy(t *testing.T) {
+	// Policy absent: no deficit export (series field stays 0, gauge untouched).
+	ob := NewReplicaTargetObserver(ObserverDeps{
+		ServiceLabelKey: "app.kubernetes.io/name",
+		Targets: &fakeTargetSource{hpas: map[string][]*autoscalingv2.HorizontalPodAutoscaler{
+			"d1": {mkHPA("h1", "d1", 4, 5)},
+		}},
+		Nodes:                fakeNodeReader{[]*v1.Node{domNode("n1"), domNode("n2")}},
+		Policies:             &fakePolicies{},
+		ManagedSchedulerName: "service-spread-scheduler",
+	})
+	deps := []*appsv1.Deployment{mkDepWithTemplate("d1", 4)}
+	series := ob.Compute(deps, map[string]string{"ns1/d1": "svc-a"}, nil)
+	if len(series) != 1 {
+		t.Fatalf("want 1 series, got %d", len(series))
+	}
+	if series[0].CapacityDeficit != 0 {
+		t.Fatalf("want deficit=0 when no policy matches (gauge untouched), got %d", series[0].CapacityDeficit)
 	}
 }
