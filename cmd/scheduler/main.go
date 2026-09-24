@@ -8,13 +8,13 @@ import (
 	"context"
 	"os"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/component-base/cli"
 	"k8s.io/klog/v2"
-	"net/http"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+	"net/http"
 
 	"github.com/cnyup/service-spread-scheduler/internal/spread"
 )
