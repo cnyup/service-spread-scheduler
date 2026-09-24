@@ -137,7 +137,7 @@ The scheduler process exports Prometheus metrics on `:9100/metrics` (see `cmd/sc
 - `ServiceSpreadFilterRejectionRate` (warning): filter rejections sustained above 0.5/s for 10m — pods are systematically unschedulable under current spread constraints.
 - `ServiceSpreadObserverMetricsStale` (critical): `service_spread_replica_target` absent for 10m — the observer loop or the metrics endpoint is down.
 
-Note: prometheus-operator loads the PrometheusRule only when its `ruleSelector` matches the object's labels — adjust `release: kube-prometheus-stack` to your setup. `hack/e2e/verify-observer.sh` validates the export path end-to-end on a kind cluster (rebuild → rollout → port-forward → metric assertions).
+Note: prometheus-operator loads the PrometheusRule only when its `ruleSelector` matches the object's labels — adjust `release: kube-prometheus-stack` to your setup. Gauge rules aggregate with `max by (...)` and counter rules with `sum by (...)` because both scheduler replicas export the same series (leader and followers); `absent()` fires only on total loss — per-replica detection needs the instance/job label from your scrape config. `hack/e2e/verify-observer.sh` validates the export path end-to-end on a kind cluster (rebuild → rollout → port-forward → metric assertions); `hack/e2e/chaos.sh` runs the §8.4 failure drills.
 
 ## Toolchain notes
 

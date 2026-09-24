@@ -13,6 +13,15 @@
 # metadata.labels. Adjust `release` to whatever value your Prometheus instance
 # selects on (the kube-prometheus-stack default is `release: kube-prometheus-stack`);
 # until it matches, the rules are silently ignored.
+#
+# MULTI-REPLICA AGGREGATION: the deployment runs 2 scheduler replicas and the
+# observer loop exports gauges on leader AND followers (local gauges, no side
+# effects — dev-design §9 deviation 4). Prometheus therefore scrapes the same
+# logical series from two instances. Gauge rules below aggregate with
+# `max by (...)` so one logical alert fires regardless of replica count;
+# counter rules use `sum by (...)` (followers idle at 0, the leader carries
+# the activity). absent() fires only on TOTAL loss — per-replica detection
+# needs the job label once the scrape config is fixed (see stale rule).
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -30,7 +39,7 @@ spec:
         # at 0, so any positive sample is actionable: scaling to the HPA
         # ceiling will necessarily leave pods Pending.
         - alert: ServiceSpreadCapacityDeficit
-          expr: service_spread_capacity_deficit > 0
+          expr: max by (namespace, service) (service_spread_capacity_deficit) > 0
           for: 5m
           labels:
             severity: warning
@@ -48,7 +57,7 @@ spec:
         # the exported target is no longer authoritative. Hold 10m to ride out
         # transient list/watch hiccups.
         - alert: ServiceSpreadReplicaTargetFallback
-          expr: service_spread_fallback_active == 1
+          expr: max by (namespace, service, domain) (service_spread_fallback_active) == 1
           for: 10m
           labels:
             severity: warning
@@ -64,6 +73,8 @@ spec:
         # maxPodsPerNode for the service (canonical reason ServiceSpreadConstraint).
         # Sustained > 0.5 rejections/s for 10m means placement is being
         # repeatedly refused rather than a single noisy rejection.
+        # sum by (reason) also folds the two replica instances together:
+        # followers sit at 0, the leader carries the scheduling activity.
         - alert: ServiceSpreadFilterRejectionRate
           expr: sum by (reason) (rate(service_spread_filter_rejections_total[5m])) > 0.5
           for: 10m
@@ -81,9 +92,10 @@ spec:
         # exported on every observer cycle; if the series disappears entirely
         # the metrics endpoint is unreachable or the observation loop has
         # stopped — the up==0 analogue for a gauge that must always exist.
-        # Narrow to a single scrape target with e.g.
-        #   absent(service_spread_replica_target{job="service-spread-scheduler"})
-        # once the job name is fixed in the scrape config.
+        # NOTE with 2 replicas this fires only on TOTAL loss; a single dead
+        # replica is masked by the healthy one. Per-instance detection:
+        #   absent(service_spread_replica_target{job="..."}) — after the job
+        #   label is fixed, or alert on count by (instance) (...) < 2.
         - alert: ServiceSpreadObserverMetricsStale
           expr: absent(service_spread_replica_target)
           for: 10m
