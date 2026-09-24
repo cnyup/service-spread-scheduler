@@ -5,7 +5,11 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	corev1listers "k8s.io/client-go/listers/core/v1"
+
+	configv1alpha1 "github.com/cnyup/service-spread-scheduler/apis/config/v1alpha1"
 )
 
 // countablePod reports whether a pod meets the snapshot counting standard
@@ -174,4 +178,69 @@ func (s *spreadState) RunReconciler(ctx context.Context, period time.Duration, s
 			}
 		}
 	}
+}
+
+// ---- production wiring (M4) ----
+
+// listerPodSource derives countable pod refs from the shared pod informer
+// cache. It is the production PodSource for the janitor and reconciler: it
+// applies the same counting standard as the pod event path (countablePod on
+// pods of the managed scheduler carrying the service label), so a snapshot
+// rebuilt from it covers exactly the UIDs the event path would count.
+type listerPodSource struct {
+	pods            corev1listers.PodLister
+	managedSched    string
+	serviceLabelKey string
+}
+
+// newListerPodSource adapts a pod lister to PodSource; it is the production
+// wiring used by depsFromHandle.
+func newListerPodSource(pods corev1listers.PodLister, managedScheduler, serviceLabelKey string) PodSource {
+	return &listerPodSource{pods: pods, managedSched: managedScheduler, serviceLabelKey: serviceLabelKey}
+}
+
+func (s *listerPodSource) ListCountable() (map[types.UID]podRef, error) {
+	all, err := s.pods.List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[types.UID]podRef, len(all))
+	for _, pod := range all {
+		if pod.Spec.SchedulerName != s.managedSched || !countablePod(pod) {
+			continue
+		}
+		ref, err := PodRefFor(pod, s.managedSched, s.serviceLabelKey)
+		if err != nil {
+			// Managed but unlabeled: never counted, mirroring onPodEvent.
+			continue
+		}
+		out[pod.UID] = ref
+	}
+	return out, nil
+}
+
+// StartLifecycleLoops launches the TTL janitor and the periodic snapshot
+// reconciler against one verification source, mirroring RunObserverLoop's
+// startup convention (one goroutine per loop, owned by ctx, non-blocking).
+// Zero or negative durations fall back to the documented defaults so a
+// mis-wired call can never panic time.NewTicker inside a goroutine and take
+// the scheduler process down.
+func StartLifecycleLoops(
+	ctx context.Context,
+	state *spreadState,
+	src PodSource,
+	ttl, period time.Duration,
+	alert func(uid types.UID),
+) {
+	if ttl <= 0 {
+		ttl = configv1alpha1.DefaultReservationTTL
+	}
+	if period <= 0 {
+		period = configv1alpha1.DefaultReconcilePeriod
+	}
+	if alert == nil {
+		alert = func(types.UID) {}
+	}
+	go state.RunJanitor(ctx, ttl, src, alert)
+	go state.RunReconciler(ctx, period, src)
 }

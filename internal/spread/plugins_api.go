@@ -133,12 +133,27 @@ func depsFromHandle(ctx context.Context, args configv1alpha1.ServiceSpreadArgs, 
 		},
 	)
 	go RunObserverLoop(ctx, ObserverLoopDeps{
-		Deployments:    sif.Apps().V1().Deployments().Lister(),
-		Pods:           sif.Core().V1().Pods().Lister(),
-		TargetSource:   targets,
-		ServiceLabelKey: args.ServiceLabelKey,
-		ExportInterval: 30 * time.Second,
+		Deployments:          sif.Apps().V1().Deployments().Lister(),
+		Pods:                 sif.Core().V1().Pods().Lister(),
+		TargetSource:         targets,
+		ServiceLabelKey:      args.ServiceLabelKey,
+		ExportInterval:       30 * time.Second,
+		Nodes:                nodes,
+		Policies:             policies,
+		ManagedSchedulerName: args.ManagedSchedulerName,
 	})
+
+	// Reservation TTL janitor + snapshot reconciler (M4): both read the
+	// shared pod informer cache as the verification source, same startup
+	// convention as the observer loop above (dev-design §4.4/§8.3).
+	StartLifecycleLoops(ctx, st,
+		newListerPodSource(sif.Core().V1().Pods().Lister(), args.ManagedSchedulerName, args.ServiceLabelKey),
+		args.ReservationTTL.Duration, args.ReconcilePeriod.Duration,
+		func(uid PodUID) {
+			klog.Background().Info(
+				"ServiceSpread janitor kept a reservation after an inconclusive verification",
+				"podUID", string(uid))
+		})
 
 	return pluginDeps{
 		policies: policies,
