@@ -19,8 +19,8 @@ and `../service-spread-scheduler-dev-design.md` (implementation design).
 | --- | --- | --- |
 | M1 | API scaffolding, `ServiceSpreadPolicy` CRD, `ServiceSpreadArgs` config API, policy webhook (deterministic naming + validation + shared ConfigMap), CEL `nodeName` VAP manifests | **done** |
 | M2 | service quota/scheduling keys, `schedulingDomainHash`, COW counters + reservation state machine | **done** |
-| M3 | scheduler plugin extension points, EnqueueExtensions, cluster-event hints | **done** (e2e pending) |
-| M4 | replica-target observer, capacity alerting, metrics, TTL janitor wiring, reconciler wiring, production manifests, kind e2e | next |
+| M3 | scheduler plugin extension points, EnqueueExtensions, cluster-event hints | **done** (e2e matrix 9 PASS + chaos drills 4/4 on kind) |
+| M4 | replica-target observer, capacity alerting, metrics, TTL janitor wiring, reconciler wiring, production manifests, kind e2e | **mostly done** (2026-09-24): observer + alerts + janitor/reconciler wiring + chaos §8.4 verified on kind; remaining: production-grade manifests (image tags, resources, PDB) |
 
 M1/M2 did not change scheduling behaviour. M3 registers the plugin:
 `cmd/scheduler` wires `app.WithPlugin(spread.Name, spread.New)`, so the

@@ -249,9 +249,18 @@ case6() {
   mkdeploy c6 f1 6                 # 6 replicas, 2 workers * cap2 = only 4 can run
   if wait_running c6 app.kubernetes.io/name=f1 4 120; then
     if within_cap c6 app.kubernetes.io/name=f1 2 && skew_ok c6 app.kubernetes.io/name=f1 1; then
-      local pd ev
+      local pd ev deadline=$((SECONDS+60))
       pd=$(pending_count c6 app.kubernetes.io/name=f1)
-      ev=$(kubectl -n c6 get events --field-selector reason=FailedScheduling -o jsonpath='{.items[*].message}' 2>/dev/null)
+      # Event delivery is aggregated/batched in the scheduler's event
+      # recorder; after leader switches or informer cold starts the
+      # FailedScheduling event may land seconds after the rejection.
+      # Poll up to 60s instead of asserting immediately.
+      ev=""
+      while [ $SECONDS -lt $deadline ]; do
+        ev=$(kubectl -n c6 get events --field-selector reason=FailedScheduling -o jsonpath='{.items[*].message}' 2>/dev/null)
+        [[ "$ev" == *MaxPodsPerNodeExceeded* ]] && break
+        sleep 5
+      done
       if [ "$pd" -ge 2 ] && [[ "$ev" == *MaxPodsPerNodeExceeded* ]]; then
         pass 6 "4 Running (2+2), extras Pending with MaxPodsPerNodeExceeded events"
       else

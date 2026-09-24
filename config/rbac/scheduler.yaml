@@ -17,6 +17,14 @@ rules:
   - apiGroups: [""]
     resources: [pods, nodes]
     verbs: [get, list, watch]
+  # Scheduling diagnostics: the 1.28 event recorder PATCHes aggregated
+  # events via the events.k8s.io API group; the core "" events rule above
+  # is NOT enough — without this the broadcaster logs "Server rejected
+  # event ... will not retry" and FailedScheduling diagnostics never reach
+  # kubectl describe (found by e2e matrix case 6 on kind).
+  - apiGroups: ["events.k8s.io"]
+    resources: [events]
+    verbs: [create, patch, update]
   # Native kube-scheduler informer surface (VolumeBinding, PDB etc.) — the
   # binary watches these regardless of which plugins our profile enables;
   # without them the reflectors spam errors and native filter plugins fail.
