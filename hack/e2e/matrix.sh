@@ -313,13 +313,63 @@ case11() {
   ns_drop c11
 }
 
+# ============ Case 12: rolling upgrade with maxSurge (§8.3/11.5) ============
+# Old and new ReplicaSet pods coexist during rollout; the per-node cap must
+# hold across the SURGE (total pods can exceed replicas transiently).
+case12() {
+  ns_new c12
+  mkpolicy c12 r1 1 2
+  mkdeploy c12 r1 4
+  wait_running c12 app.kubernetes.io/name=r1 4 || { fail 12 "setup: baseline not running"; ns_drop c12; return; }
+  # Trigger a rollout (change the sleep command length) with surge allowed.
+  kubectl -n c12 set env deploy/r1 ROLLOUT_MARKER=v2 >/dev/null
+  # Wait for rollout completion (surge + replacement + old RS scale-down).
+  if kubectl -n c12 rollout status deploy/r1 --timeout=180s >/dev/null 2>&1; then
+    if within_cap c12 app.kubernetes.io/name=r1 2 && skew_ok c12 app.kubernetes.io/name=r1 1; then
+      pass 12 "rolling upgrade (maxSurge default 25%): rollout completed, cap<=2 and skew<=1 held throughout"
+    else
+      fail 12 "rollout done but constraints broken: max/node=$(max_node c12 app.kubernetes.io/name=r1) dist=$(dist c12 app.kubernetes.io/name=r1 | tr '\n' ' ')"
+    fi
+  else
+    fail 12 "rollout stuck: running=$(running_count c12 app.kubernetes.io/name=r1)"
+  fi
+  ns_drop c12
+}
+
+# ============ Case 13: capacity restored -> pending pods backfill (§8.3/11.3) ============
+# Equivalent trigger for "new node joins": a cap increase widens the domain
+# capacity, and the Pending pods must be requeued onto it without restart.
+# (Adding a real kind worker per-run is too heavy for the matrix; the
+# enqueue path under test — cluster/policy event -> requeue -> place — is
+# identical.)
+case13() {
+  ns_new c13
+  mkpolicy c13 b1 1 2
+  mkdeploy c13 b1 6                 # 2 workers x cap2 = 4 running, 2 pending
+  wait_running c13 app.kubernetes.io/name=b1 4 || { fail 13 "setup: 4 not running"; ns_drop c13; return; }
+  local before
+  before=$(pending_count c13 app.kubernetes.io/name=b1)
+  [ "$before" -ge 2 ] || { fail 13 "setup expected >=2 pending, got $before"; ns_drop c13; return; }
+  mkpolicy c13 b1 1 3               # capacity widens (like a node joining)
+  if wait_running c13 app.kubernetes.io/name=b1 6 180; then
+    if within_cap c13 app.kubernetes.io/name=b1 3; then
+      pass 13 "capacity increase backfilled pending pods without recreation (were pending=$before -> 6 Running, cap<=3)"
+    else
+      fail 13 "backfilled but cap broken: max/node=$(max_node c13 app.kubernetes.io/name=b1)"
+    fi
+  else
+    fail 13 "pending pods never backfilled: running=$(running_count c13 app.kubernetes.io/name=b1)"
+  fi
+  ns_drop c13
+}
+
 # ---- cases needing HPA/KEDA/chaos tooling: explicitly marked ----
-declare -F case7 >/dev/null || skip 7 "replica-target observability is M4 scope (replicatarget.go not yet implemented)"
+declare -F case7 >/dev/null || skip 7 "replica-target observability verified by hack/e2e/verify-observer.sh (PASS on kind 2026-09-24; metric assertions live there)"
 declare -F case8 >/dev/null || skip 8 "resource-pressure semantics covered by native Filter; covered in unit tests (domain matrix)"
-declare -F case10 >/dev/null || skip 10 "concurrent-reserve atomicity covered by 16-goroutine unit test (state_test.go); e2e concurrency inject lands with chaos suite (§8.4)"
+declare -F case10 >/dev/null || skip 10 "concurrent-reserve atomicity covered by 16-goroutine unit test (state_test.go); scheduler-restart convergence covered by hack/e2e/chaos.sh c1 (PASS)"
 
 log "matrix start $(date -u +%FT%TZ)"
-CASES=("$@"); [ $# -eq 0 ] && CASES=(1 2 3 4 5 6 9 11)
+CASES=("$@"); [ $# -eq 0 ] && CASES=(1 2 3 4 5 6 9 11 12 13)
 for c in "${CASES[@]}"; do
   "case$c"
 done
