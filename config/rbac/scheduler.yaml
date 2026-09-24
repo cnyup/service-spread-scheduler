@@ -54,6 +54,16 @@ rules:
   - apiGroups: ["autoscaling"]
     resources: [horizontalpodautoscalers]
     verbs: [get, list, watch]
+  # M4 observer: KEDA ScaledObject dynamic informer (keda.sh/v1alpha1).
+  # On clusters WITHOUT KEDA the discovery probe short-circuits (group not
+  # registered -> "absent"), so a missing rule is invisible there; on
+  # KEDA-equipped clusters the rule is what separates "absent" from
+  # "degraded" (registered but unreadable) — without it the observer
+  # falsely reports degraded and falls back. Found by the RBAC contract
+  # test's RED run (rbac_expected_test.go).
+  - apiGroups: ["keda.sh"]
+    resources: [scaledobjects]
+    verbs: [list, watch]
   # Custom GVK enqueue hints use metadata only; covered by the watches above.
   # Events for scheduling diagnostics are emitted by kube-scheduler itself
   # (system: kube-scheduler), not by this plugin — no Events verb needed.

@@ -1,0 +1,75 @@
+# CI for service-spread-scheduler: build, vet, format, unit tests.
+#
+# Scope decisions:
+# - go test ./... runs the FULL suite; envtest integration tests
+#   self-skip when KUBEBUILDER_ASSETS is unset (internal/webhook/envtest_test.go)
+#   — wiring setup-envtest here is possible later but the acceptance for
+#   cluster behaviour lives in the kind e2e scripts (hack/e2e/), which need
+#   a docker daemon and are not cost-effective per-push on this 2-repo-person
+#   project. Revisit when the team grows.
+# - gofmt check runs only on non-generated files: api/..._zz_generated
+#   deep-copy files are controller-gen artifacts (with build tags that
+#   gofmt -l still flags); formatting them by hand creates churn.
+# - The RBAC contract test (internal/spread/rbac_expected_test.go) runs as
+#   part of the unit suite and guards the "code gained an informer, RBAC
+#   manifest didn't follow" bug family that hit production three times.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Check gofmt (non-generated)
+        run: |
+          unformatted=$(gofmt -l . | grep -v '_zz_generated' || true)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Unit tests (race)
+        run: go test ./... -race -count=1
+
+      - name: Validate YAML manifests
+        run: |
+          python3 - <<'PY'
+          import glob, sys
+          import yaml
+          bad = []
+          files = (glob.glob("config/**/*.yaml", recursive=True)
+                   + glob.glob("hack/e2e/*.yaml", recursive=True))
+          for f in files:
+              try:
+                  list(yaml.safe_load_all(open(f)))
+              except Exception as e:
+                  bad.append(f"{f}: {e}")
+          if bad:
+              print("\n".join(bad)); sys.exit(1)
+          print(f"OK: {len(files)} manifests parse")
+          PY
+
+      - name: Shellcheck e2e scripts (non-fatal)
+        run: |
+          # syntax check only: shellcheck is not guaranteed on the runner
+          # image in old versions; bash -n catches parse-level breakage.
+          for f in hack/e2e/*.sh; do bash -n "$f" || exit 1; done
+          echo "OK: shell syntax"
