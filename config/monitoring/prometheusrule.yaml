@@ -1,0 +1,97 @@
+---
+# PrometheusRule for the ServiceSpread scheduler (design doc §10.3 "告警建议",
+# §12.2 "容量校验"). Four orthogonal rules, one per alertable signal.
+#
+# Metric names and label sets below mirror exactly what the process registers
+# (internal/spread/replicatarget.go, internal/spread/plugin.go):
+#   service_spread_capacity_deficit{namespace,service}              (gauge)
+#   service_spread_fallback_active{namespace,service,domain}         (gauge 0/1)
+#   service_spread_filter_rejections_total{reason}                   (counter)
+#   service_spread_replica_target{namespace,service,domain}          (gauge)
+#
+# prometheus-operator only loads this object when its `ruleSelector` matches
+# metadata.labels. Adjust `release` to whatever value your Prometheus instance
+# selects on (the kube-prometheus-stack default is `release: kube-prometheus-stack`);
+# until it matches, the rules are silently ignored.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: service-spread-scheduler
+  namespace: service-spread-system
+  labels:
+    app: service-spread-scheduler
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: service-spread-scheduler.rules
+      rules:
+        # §10.3/§12.2 — HPA maxReplicas exceeds what the eligible-node union
+        # can host at maxPodsPerNode. The observer already floors the deficit
+        # at 0, so any positive sample is actionable: scaling to the HPA
+        # ceiling will necessarily leave pods Pending.
+        - alert: ServiceSpreadCapacityDeficit
+          expr: service_spread_capacity_deficit > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Service {{ $labels.namespace }}/{{ $labels.service }} cannot host its HPA ceiling"
+            description: >-
+              service_spread_capacity_deficit is {{ $value }} for
+              {{ $labels.namespace }}/{{ $labels.service }}: HPA maxReplicas
+              exceeds serviceEligibleNodeCount x maxPodsPerNode. Scaling to the
+              HPA ceiling will leave pods Pending.
+
+        # §10.3/§12.1 — replica-target reads are degraded and the sample is a
+        # fallback (ReplicaTargetFallback) or last-good value. Replica targets
+        # never drive placement, so this does not block scheduling; it means
+        # the exported target is no longer authoritative. Hold 10m to ride out
+        # transient list/watch hiccups.
+        - alert: ServiceSpreadReplicaTargetFallback
+          expr: service_spread_fallback_active == 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Replica target fallback active for {{ $labels.namespace }}/{{ $labels.service }}"
+            description: >-
+              service_spread_fallback_active has been 1 for 10m on
+              {{ $labels.namespace }}/{{ $labels.service }} (domain
+              {{ $labels.domain }}): HPA/KEDA/deployment reads are failing and
+              the reported replica target is a fallback or last-good value.
+
+        # §10.3 — pending pods rejected because every node already holds
+        # maxPodsPerNode for the service (canonical reason ServiceSpreadConstraint).
+        # Sustained > 0.5 rejections/s for 10m means placement is being
+        # repeatedly refused rather than a single noisy rejection.
+        - alert: ServiceSpreadFilterRejectionRate
+          expr: sum by (reason) (rate(service_spread_filter_rejections_total[5m])) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High ServiceSpread filter rejection rate (reason={{ $labels.reason }})"
+            description: >-
+              sum by (reason) rate(service_spread_filter_rejections_total[5m])
+              is {{ $value }}/s over 10m for reason {{ $labels.reason }}:
+              placement is being rejected repeatedly, e.g. all nodes at
+              maxPodsPerNode.
+
+        # §10.3/§12.1 — observer data stale. service_spread_replica_target is
+        # exported on every observer cycle; if the series disappears entirely
+        # the metrics endpoint is unreachable or the observation loop has
+        # stopped — the up==0 analogue for a gauge that must always exist.
+        # Narrow to a single scrape target with e.g.
+        #   absent(service_spread_replica_target{job="service-spread-scheduler"})
+        # once the job name is fixed in the scrape config.
+        - alert: ServiceSpreadObserverMetricsStale
+          expr: absent(service_spread_replica_target)
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ServiceSpread observer metrics are absent"
+            description: >-
+              service_spread_replica_target has been missing for 10m: the
+              scheduler metrics endpoint is down or the observation loop has
+              stopped. Replica-target and capacity visibility are lost.
