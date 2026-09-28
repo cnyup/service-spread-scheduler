@@ -123,8 +123,10 @@ jobs:
           for img in scheduler webhook; do
             src="ghcr.io/cnyup/service-spread-scheduler/${img}:${TAG}"
             dst="${REGISTRY}/${NS}/${img}:${TAG}"
+            echo "::group::mirror ${img}"
             docker pull --platform linux/amd64 "$src"   # re-tag single-arch
             docker tag "$src" "$dst"
-            docker push "$dst"
+            docker push "$dst" 2>&1 | tee /tmp/push-${img}.log | tail -5
+            echo "::endgroup::"
             echo "mirrored ${img}: ${src} -> ${dst}"
           done
