@@ -83,6 +83,7 @@ jobs:
         id: cfg
         env:
           ENABLE_ACR: ${{ vars.ENABLE_ACR }}
+          NS: ${{ secrets.ACR_NAMESPACE }}
           HAS_REGISTRY: ${{ secrets.ACR_REGISTRY != '' }}
           HAS_NAMESPACE: ${{ secrets.ACR_NAMESPACE != '' }}
           HAS_USERNAME: ${{ secrets.ACR_USERNAME != '' }}
@@ -99,6 +100,16 @@ jobs:
           [ "$HAS_NAMESPACE" = "true" ] || ok=false
           [ "$HAS_USERNAME" = "true" ] || ok=false
           [ "$HAS_PASSWORD" = "true" ] || ok=false
+          # ACR_NAMESPACE must be the bare namespace (e.g. "cnyup"), NOT a
+          # path — "cnyup/scheduler" pushes to a nonexistent three-segment
+          # repository and fails with "denied" (run v0.1.0-alpha.1-acr.4).
+          # Count slashes without printing the value.
+          NS_SLASHES=$(echo -n "$NS" | tr -cd '/' | wc -c | tr -d ' ')
+          echo "ACR_NAMESPACE slash-count: ${NS_SLASHES} (must be 0)"
+          if [ "${NS_SLASHES}" != "0" ]; then
+            echo "::error::ACR_NAMESPACE contains '/' — set it to the bare namespace (e.g. cnyup), the job appends /scheduler and /webhook itself"
+            ok=false
+          fi
           echo "configured=$ok" >> "$GITHUB_OUTPUT"
           if [ "$ok" != "true" ]; then
             echo "::warning::push-acr skipped — fix the UNSET items above (Settings → Secrets and variables → Actions; ENABLE_ACR belongs on the Variables tab, the four ACR_* on the Secrets tab)"
