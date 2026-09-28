@@ -94,14 +94,19 @@ issue, not a general egress problem. Distribution route for mainland:
 
 1. Enable the `push-acr` job (repo Settings → Secrets and variables →
    Actions): set variable `ENABLE_ACR=true`, and secrets `ACR_REGISTRY`
-   (e.g. `xxx-registry.cn-beijing.cr.aliyuncs.com`), `ACR_NAMESPACE`,
-   `ACR_USERNAME`, `ACR_PASSWORD`. Every `v*` tag then also mirrors the
-   images to ACR (public-internet push from GitHub runners).
-2. Deployments reference the ACR path with the **VPC endpoint** when the
-   cluster lives in the same region (`...-vpc.cn-<region>.cr.aliyuncs.com`);
-   the public endpoint works from anywhere but is slower and metered.
-3. If the ACR namespace is private, create an imagePullSecret
-   (docker-registry type) in `service-spread-system` and add it to
+   (e.g. `registry.cn-hangzhou.aliyuncs.com` — personal edition has NO
+   `.cr` segment; the enterprise-style domain does not resolve), a BARE
+   `ACR_NAMESPACE` (slashes are rejected by the config check), `ACR_USERNAME`,
+   `ACR_PASSWORD`. Every `v*` tag then also mirrors the images to ACR
+   (public-internet push from GitHub runners).
+2. Deployments reference the same ACR domain. NOTE: personal edition
+   does not offer `-vpc` endpoints (enterprise only) and cross-region
+   clusters pull over the public endpoint; same-region personal edition
+   still goes through the default domain.
+3. **imagePullSecret is ALWAYS required** — a personal-edition "public"
+   repository is NOT anonymously pullable (verified 2026-09-28: anonymous
+   token grants no pull scope, 401). Create the secret in
+   `service-spread-system` from the ACR credential and add it to
    `spec.template.spec.imagePullSecrets` of both Deployments.
 4. One-off bootstrap before the next release: push the current tag
    manually once (`docker pull ghcr.io/... && docker tag && docker push`)
