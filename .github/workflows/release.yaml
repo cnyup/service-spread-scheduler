@@ -9,6 +9,16 @@
 #  debian:bookworm-slim runtime, GOPROXY=goproxy.cn for reachability).
 # - After a release, update deployments with the pinned tag instead of
 #  :latest (see config/manager/*.yaml notes).
+#
+# Optional ACR mirror (mainland distribution): ghcr.io is unreachable from
+# many mainland clusters (verified 2026-09-28 on an ACK Beijing cluster:
+# pulls hang indefinitely with no error event). The push-acr job below
+# re-pushes the same images to a personal Aliyun ACR instance so mainland
+# nodes pull over the VPC endpoint instead. Disabled unless ALL of:
+#   vars.ENABLE_ACR == 'true', secrets.ACR_REGISTRY, ACR_NAMESPACE,
+#   ACR_USERNAME, ACR_PASSWORD.
+# Registry form: <instance>-registry.cn-<region>.cr.aliyuncs.com (personal
+# edition). Clusters in the same region should pull from the -vpc variant.
 name: release
 on:
   push:
@@ -60,3 +70,39 @@ jobs:
             ghcr.io/cnyup/service-spread-scheduler/webhook:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Mainland mirror: pulls the just-pushed ghcr images by digest and re-pushes
+  # them to Aliyun ACR. Runs only when explicitly enabled (vars.ENABLE_ACR)
+  # and all four secrets exist; the ghcr job above is unaffected otherwise.
+  push-acr:
+    runs-on: ubuntu-latest
+    needs: release
+    if: >-
+      vars.ENABLE_ACR == 'true' &&
+      secrets.ACR_REGISTRY != '' &&
+      secrets.ACR_NAMESPACE != '' &&
+      secrets.ACR_USERNAME != '' &&
+      secrets.ACR_PASSWORD != ''
+    steps:
+      - name: Log in to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Mirror images to ACR
+        env:
+          REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          NS: ${{ secrets.ACR_NAMESPACE }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          for img in scheduler webhook; do
+            src="ghcr.io/cnyup/service-spread-scheduler/${img}:${TAG}"
+            dst="${REGISTRY}/${NS}/${img}:${TAG}"
+            docker pull --platform linux/amd64 "$src"   # re-tag single-arch
+            docker tag "$src" "$dst"
+            docker push "$dst"
+            echo "mirrored ${img}: ${src} -> ${dst}"
+          done
