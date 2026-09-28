@@ -369,6 +369,17 @@ declare -F case8 >/dev/null || skip 8 "resource-pressure semantics covered by na
 declare -F case10 >/dev/null || skip 10 "concurrent-reserve atomicity covered by 16-goroutine unit test (state_test.go); scheduler-restart convergence covered by hack/e2e/chaos.sh c1 (PASS)"
 
 log "matrix start $(date -u +%FT%TZ)"
+
+# RBAC drift guard: three same-family incidents (HPA informer 53ca40e,
+# events.k8s.io f380a07, keda.sh 2026-09-28) came from "manifest updated,
+# cluster stale" — bootstrap.sh only applies on first deploy. Idempotent
+# re-apply here keeps the live ClusterRole pinned to the manifest; the
+# contract test (rbac_expected_test.go) guards the manifest side only.
+if [ -f config/rbac/scheduler.yaml ]; then
+  kubectl apply -f config/rbac/scheduler.yaml >/dev/null 2>&1 \
+    && log "rbac re-applied (drift guard)"
+fi
+
 CASES=("$@"); [ $# -eq 0 ] && CASES=(1 2 3 4 5 6 9 11 12 13)
 for c in "${CASES[@]}"; do
   "case$c"

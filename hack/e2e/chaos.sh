@@ -210,6 +210,16 @@ EOF
   ns_drop "$ns"
 }
 
+# RBAC drift guard: three same-family incidents (HPA informer 53ca40e,
+# events.k8s.io f380a07, keda.sh 2026-09-28) came from "manifest updated,
+# cluster stale" — bootstrap.sh only applies on first deploy. Idempotent
+# re-apply here keeps the live ClusterRole pinned to the manifest; the
+# contract test (rbac_expected_test.go) guards the manifest side only.
+if [ -f config/rbac/scheduler.yaml ]; then
+  kubectl apply -f config/rbac/scheduler.yaml >/dev/null 2>&1 \
+    && log "rbac re-applied (drift guard)"
+fi
+
 if [ $# -eq 0 ]; then set -- 1 2 3 4; fi
 for c in "$@"; do
   case $c in
