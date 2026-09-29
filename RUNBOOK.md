@@ -51,12 +51,18 @@ kubectl apply -f config/manager/configmap.yaml
 # defaults; serviceLabelKey must stay in sync with
 # config/scheduler/kubeconfig.yaml.
 
-# 2.5 webhook: certificate first, then service + deployment + registration
-# cert-manager path (production default):
-kubectl apply -f config/webhook/certificates.yaml
-# manual path: create a TLS secret named per webhook.yaml's volume, then
-# inject its CA into the ValidatingWebhookConfiguration caBundle
-# (kubectl patch --patch-file; the e2e bootstrap has a working example).
+# 2.5 webhook: certificate path — pick ONE
+# (a) In-process self-signed (DEFAULT since v0.1): nothing to do here.
+#     config/manager/webhook.yaml already runs with -self-sign-certs
+#     -leader-elect: the leader replica generates/rotates the CA+serving
+#     cert, writes the Secret, patches the caBundle. Zero external
+#     dependencies (KEDA-style). Expect a few seconds of fail-closed
+#     policy writes on very first install until the caBundle lands.
+# (b) cert-manager: kubectl apply -f config/webhook/certificates.yaml
+#     AND remove the two flags from webhook.yaml (do not run both —
+#     whoever writes the Secret last wins).
+# (c) Manual: create a TLS secret named service-spread-webhook-serving-cert,
+#     then patch the caBundle (the e2e bootstrap has a working example).
 
 kubectl apply -f config/webhook/service.yaml
 kubectl apply -f config/manager/webhook.yaml

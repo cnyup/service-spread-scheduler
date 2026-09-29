@@ -28,6 +28,18 @@ spec:
             - --webhook-cert-dir=/tmp/k8s-webhook-server/serving-certs
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
+            # KEDA-style self-signed certificates: the leader replica
+            # generates/rotates the serving cert in-process and patches the
+            # caBundle. cert-manager (config/webhook/certificates.yaml) is
+            # NOT required with this mode; if both are present, whoever
+            # writes the Secret last wins — pick one.
+            - --leader-elect
+            - --self-sign-certs
+          env:
+            - name: WEBHOOK_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           ports:
             - name: webhook
               containerPort: 9443

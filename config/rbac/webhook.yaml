@@ -33,6 +33,61 @@ rules:
       - get
       - list
       - watch
+  # Self-signed certificate rotation (KEDA-style, -self-sign-certs): the
+  # leader replica writes the serving-cert Secret and patches the
+  # ValidatingWebhookConfiguration caBundle. NOTE: the create verb cannot
+  # be scoped by resourceName (the object does not exist yet) — secrets
+  # create is namespaced to this ServiceAccount's own namespace via the
+  # Role below; everything else is name-scoped in the ClusterRole.
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - service-spread-webhook-serving-cert
+    verbs:
+      - get
+      - update
+  - apiGroups:
+      - admissionregistration.k8s.io
+    resources:
+      - validatingwebhookconfigurations
+    resourceNames:
+      - service-spread-policy-validator
+    verbs:
+      - get
+      - patch
+  # Leader election for the cert rotator (single writer across replicas).
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+  # Rotating the serving cert rolls the webhook Deployment (pod-template
+  # annotation bump) so replicas reload the fresh pair.
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    resourceNames:
+      - service-spread-webhook
+    verbs:
+      - get
+      - update
+  # Leader-election and selfcert error reporting use core events.
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -42,6 +97,37 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: service-spread-webhook
+subjects:
+  - kind: ServiceAccount
+    name: service-spread-webhook
+    namespace: service-spread-system
+---
+# Namespaced Role: secrets create cannot be name-scoped (object does not
+# exist yet), so the create grant lives in a Role bound to the webhook's
+# own namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: service-spread-webhook-cert-creator
+  namespace: service-spread-system
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [service-spread-webhook-serving-cert]
+    verbs: [get, update]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: service-spread-webhook-cert-creator
+  namespace: service-spread-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: service-spread-webhook-cert-creator
 subjects:
   - kind: ServiceAccount
     name: service-spread-webhook
