@@ -75,6 +75,12 @@ func TestDecodeServiceSpreadArgsDefaults(t *testing.T) {
 	if args.ReconcilePeriod.Duration != DefaultReconcilePeriod {
 		t.Errorf("ReconcilePeriod default = %s", args.ReconcilePeriod.Duration)
 	}
+	if args.ExportNodePods == nil || *args.ExportNodePods {
+		t.Errorf("ExportNodePods default = %v, want false", args.ExportNodePods)
+	}
+	if args.ExportTargetDetail == nil || *args.ExportTargetDetail {
+		t.Errorf("ExportTargetDetail default = %v, want false", args.ExportTargetDetail)
+	}
 }
 
 func TestDecodeServiceSpreadArgsFailClosed(t *testing.T) {

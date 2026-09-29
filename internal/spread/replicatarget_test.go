@@ -178,6 +178,20 @@ func mkPodOn(node string) *corev1.Pod {
 	}
 }
 
+// mkPod builds a Running pod bound to <node> in <ns> carrying the service
+// label <svc> — the observer's counting input.
+func mkPod(name, ns, node, svc string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			UID:       types.UID(name),
+			Labels:    map[string]string{"app.kubernetes.io/name": svc},
+		},
+		Spec:   corev1.PodSpec{NodeName: node},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
 func TestObserveCycle_ProducesDomainSeries(t *testing.T) {
 	// One service, one deployment target=4, two observed pods -> series
 	// carries replica_target=4, observed_pods=2, bound_pods=2.
@@ -400,5 +414,56 @@ func TestExportSeries_ReservationsGauge(t *testing.T) {
 	ExportReservations(fakeReservationCounter{counts: map[string]int32{"garbage": 2}}, nil)
 	if v := testutil.ToFloat64(reservationsGauge.WithLabelValues("ns1", "svc-a", "default")); v != 1 {
 		t.Fatalf("reservations gauge polluted by malformed key: want 1, got %v", v)
+	}
+}
+
+// ---- debug gauges: node_pods / replica_target_detail (design 10.2, default off) ----
+
+func TestDebugGauges_DefaultOff(t *testing.T) {
+	// Compute with debug exports disabled must NOT populate node_pods or
+	// replica_target_detail — cardinality guards (design doc 10.2:
+	// 生产可选择不在全局指标上暴露 node).
+	ob := NewReplicaTargetObserver(ObserverDeps{
+		ServiceLabelKey: "app.kubernetes.io/name",
+		Targets:         &fakeTargetSource{},
+	})
+	pods := []*v1.Pod{mkPod("p1", "ns1", "n1", "svc-a"), mkPod("p2", "ns1", "n2", "svc-a")}
+	series := ob.Compute([]*appsv1.Deployment{mkDepWithTemplate("d1", 2)}, map[string]string{"ns1/d1": "svc-a"}, pods)
+	ob.ExportSeries(series)
+	if len(series) != 1 || series[0].NodePods != nil || series[0].TargetDetail != nil {
+		t.Fatalf("default-off violated: NodePods=%v TargetDetail=%v", series[0].NodePods, series[0].TargetDetail)
+	}
+	if c := testutil.CollectAndCount(nodePodsGauge); c != 0 {
+		t.Fatalf("node_pods exported while off: %d series", c)
+	}
+	if c := testutil.CollectAndCount(targetDetailGauge); c != 0 {
+		t.Fatalf("replica_target_detail exported while off: %d series", c)
+	}
+}
+
+func TestDebugGauges_ExportedWhenEnabled(t *testing.T) {
+	ob := NewReplicaTargetObserver(ObserverDeps{
+		ServiceLabelKey: "app.kubernetes.io/name",
+		Targets:         &fakeTargetSource{},
+		ExportNodePods:  true,
+		ExportDetail:    true,
+	})
+	pods := []*v1.Pod{mkPod("p1", "ns1", "n1", "svc-a"), mkPod("p2", "ns1", "n1", "svc-a"), mkPod("p3", "ns1", "n2", "svc-a")}
+	series := ob.Compute([]*appsv1.Deployment{mkDepWithTemplate("d1", 2)}, map[string]string{"ns1/d1": "svc-a"}, pods)
+	ob.ExportSeries(series)
+	if series[0].NodePods == nil || len(series[0].NodePods) != 2 {
+		t.Fatalf("NodePods aggregation broken: %+v", series[0].NodePods)
+	}
+	if v := testutil.ToFloat64(nodePodsGauge.WithLabelValues("ns1", "svc-a", "default", "n1")); v != 2 {
+		t.Fatalf("node_pods n1: want 2, got %v", v)
+	}
+	if v := testutil.ToFloat64(nodePodsGauge.WithLabelValues("ns1", "svc-a", "default", "n2")); v != 1 {
+		t.Fatalf("node_pods n2: want 1, got %v", v)
+	}
+	if len(series[0].TargetDetail) != 1 {
+		t.Fatalf("TargetDetail entries: want 1, got %d", len(series[0].TargetDetail))
+	}
+	if v := testutil.ToFloat64(targetDetailGauge.WithLabelValues("ns1", "svc-a", "default", "d1", "deployment")); v != 2 {
+		t.Fatalf("replica_target_detail d1: want 2, got %v", v)
 	}
 }

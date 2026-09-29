@@ -1,151 +1,170 @@
 # ServiceSpread Scheduler
 
-Out-of-tree Kubernetes scheduler plugin that enforces service-level pod
-spreading: pods of the same service (namespace + service label +
-`schedulerName`) are spread with a hard `maxSkew` inside their stable spread
-domain and a hard `maxPodsPerNode` cap shared across the service's scheduling
-domains. Design: see `../service-spread-scheduler-design.md` (requirements)
-and `../service-spread-scheduler-dev-design.md` (implementation design).
+Kubernetes out-of-tree 自定义调度器：按「namespace + 服务标签 + 调度域」聚合同一服务的全部 Pod，在稳定均摊节点池内强制执行 `maxSkew` 均摊与 `maxPodsPerNode` 跨域硬上限。不驱逐任何已运行 Pod；副本目标（HPA / KEDA）仅用于观测与容量告警，不参与放置决策。
 
-- Target Kubernetes: **1.28.x** (`k8s.io/kubernetes v1.28.15` + staging
-  replaces in `go.mod`; no plugin ABI across minor versions).
-- Module: `github.com/cnyup/service-spread-scheduler`.
-- CRD group: `scheduling.soyup.top/v1alpha1` (`ServiceSpreadPolicy`, short
-  name `ssp`).
+[English version](README_EN.md)
 
-## Milestone status
+## 这是什么，解决什么问题
 
-| Milestone | Scope | Status |
-| --- | --- | --- |
-| M1 | API scaffolding, `ServiceSpreadPolicy` CRD, `ServiceSpreadArgs` config API, policy webhook (deterministic naming + validation + shared ConfigMap), CEL `nodeName` VAP manifests | **done** |
-| M2 | service quota/scheduling keys, `schedulingDomainHash`, COW counters + reservation state machine | **done** |
-| M3 | scheduler plugin extension points, EnqueueExtensions, cluster-event hints | **done** (e2e matrix 9 PASS + chaos drills 4/4 on kind) |
-| M4 | replica-target observer, capacity alerting, metrics, TTL janitor wiring, reconciler wiring, production manifests, kind e2e | **done**: observer + alerts + janitor/reconciler wiring + chaos §8.4 verified on kind (2026-09-24); production manifests (resources, probes, PDB, topology spread) landed in 694c3a9; alerts validated at three layers (promql parser, promtool, live Prometheus on kind + ACK prometheus-operator); ACR mirror pipeline for mainland clusters verified end-to-end on ACK (2026-09-28) |
+**问题**：Kubernetes 原生调度器对「同一个服务的 Pod 要均匀摊开、且每个节点不能超配」没有直接表达。原生 `topologySpreadConstraints` 只在单个 workload 内生效——当同一服务拆成多个 Deployment（不同调度约束、滚动升级新旧共存、跨团队共池部署）时，各自独立计算均摊，叠加后照样倾斜甚至单节点超载。`podAntiAffinity` 是软约束的相似物，无法给出硬上限。业务侧常见的自研脚本巡检+手动迁移，滞后且有误伤风险。
 
-M1/M2 did not change scheduling behaviour. M3 registers the plugin:
-`cmd/scheduler` wires `app.WithPlugin(spread.Name, spread.New)`, so the
-example `config/scheduler/kubeconfig.yaml` now loads a profile with the
-`ServiceSpread` plugin (keep `DefaultPreemption` disabled and do not
-configure `addedAffinity` on the profile's NodeAffinity plugin — §9
-deviation 8). Scheduling-cycle scenarios are covered by plugin-level unit
-tests; the framework TestFramework-style in-process integration harness
-does not exist in 1.28 (§9 deviation 14) and end-to-end validation runs
-through the kind e2e matrix.
+**ServiceSpread 的做法**：接管显式声明 `schedulerName: service-spread-scheduler` 的 Pod，以**服务**（而非 workload）为粒度聚合计数：
 
-## Layout
+| 能力 | 语义 |
+| --- | --- |
+| `maxPodsPerNode` | 同一服务（同 namespace + 服务标签）的 Pod 在**任何节点**上的数量硬上限——跨 Deployment、跨调度域合并计数 |
+| `maxSkew` | 服务在「稳定均摊域」（Ready 且满足 selector/亲和性/toleration 的节点集合）内的最大倾斜度硬约束 |
+| 不驱逐 | 只约束新放置；cordon、缩容、策略变更都不触发已运行 Pod 的迁移 |
+| 独立调度域 | 不同 pod 约束（nodeSelector/亲和性）哈希出不同 `schedulingDomainHash`，各域独立均摊，但共享 `maxPodsPerNode` 配额 |
+| 观测不干预 | HPA / KEDA ScaledObject / Deployment 的副本目标仅导出指标与容量告警，永不改变放置决策 |
 
-```text
-api/v1alpha1/        ServiceSpreadPolicy types (CRD)
-apis/config/v1alpha1 ServiceSpreadArgs (pluginConfig.args, strict decoding)
-cmd/scheduler/       custom kube-scheduler binary (ServiceSpread registered)
-cmd/webhook/         ServiceSpreadPolicy validating webhook
-internal/spread/     keys, COW snapshot, reservations, domain, plugin, hints
-internal/webhook/    deterministic naming, shared-config source, validation
-config/crd/bases/    generated CRD manifest
-config/webhook/      ValidatingWebhookConfiguration + serving Service/certs
-config/manager/      namespace, shared ConfigMap, Deployments, CEL VAP
-config/rbac/         webhook RBAC
-config/scheduler/    KubeSchedulerConfiguration example (M3+)
+安全边界（fail-closed 设计）：缺服务标签的受管 Pod 一律拒绝；策略缺失/歧义拒绝（可配）；webhook 宕机时策略创建失败而非放行；`ServiceSpreadArgs` 严格解码（未知字段报错）。
+
+## 使用与部署
+
+### 前置要求
+
+- Kubernetes 1.28.x（1.30+ 可用，VAP 清单需升 v1，见 [RUNBOOK §4](RUNBOOK.md)）
+- 节点可达镜像仓库（大陆集群用 ACR 镜像，见下文「镜像分发」）
+- cert-manager（生产证书路径）或手动自签（e2e 同款，见 RUNBOOK §2.5）
+
+### 安装（顺序有依赖，详见 hack/deploy-checklist.md）
+
+```bash
+kubectl apply -f config/manager/namespace.yaml
+kubectl apply -f config/crd/bases/
+kubectl apply -f config/rbac/scheduler.yaml
+kubectl apply -f config/rbac/webhook.yaml
+kubectl apply -f config/manager/configmap.yaml
+
+# 证书（cert-manager 路径）
+kubectl apply -f config/webhook/certificates.yaml
+kubectl -n service-spread-system wait --for=condition=Ready \
+  certificate/service-spread-webhook-serving-cert --timeout=120s
+
+# webhook + 调度器（镜像钉版本，见「镜像分发」）
+kubectl apply -f config/webhook/service.yaml
+kubectl apply -f config/manager/webhook.yaml
+kubectl apply -f config/webhook/manifests.yaml
+kubectl apply -f config/manager/scheduler.yaml
+
+# VAP（可选：阻止受管 Pod 预设 nodeName 绕过；1.28 需开双 feature gate）
+kubectl apply -f config/manager/vap-block-preset-nodename.yaml
 ```
 
-## Build & test
-
-```sh
-make generate manifests   # deepcopy + CRD (controller-gen, see Makefile pin)
-make test-unit            # go test ./...
-make envtest-binaries     # download kube-apiserver/etcd for envtest (1.28.x)
-make test-integration     # admission matrix + VAP behaviour against envtest
-```
-
-Integration tests skip themselves when `KUBEBUILDER_ASSETS` is not set.
-`make test` runs both tiers.
-
-## Cluster-level configuration
-
-The scheduler and the webhook share one ConfigMap,
-`service-spread-scheduler-config` (see `config/manager/configmap.yaml`):
+### 使用：三步接入一个服务
 
 ```yaml
-data:
-  serviceLabelKey: "app.kubernetes.io/name"
-  managedSchedulerName: "service-spread-scheduler"
-```
-
-`serviceLabelKey` must equal `ServiceSpreadArgs.serviceLabelKey` in the
-scheduler kubeconfig. The webhook fails closed while the ConfigMap is missing
-or invalid.
-
-## Applying M1 to a cluster
-
-1. Install the CRD: `config/crd/bases/`.
-2. Namespace + shared ConfigMap: `config/manager/namespace.yaml`,
-   `config/manager/configmap.yaml`.
-3. Webhook (needs cert-manager or an equivalent CA injection for
-   `service-spread-webhook-serving-cert`): `config/rbac/webhook.yaml`,
-   `config/webhook/service.yaml`, `config/manager/webhook.yaml`,
-   `config/webhook/manifests.yaml`.
-4. nodeName bypass protection (K8s 1.28: enable
-   `--feature-gates=ValidatingAdmissionPolicy=true` and
-   `--runtime-config=admissionregistration.k8s.io/v1beta1=true` on
-   kube-apiserver): `config/manager/vap-block-preset-nodename.yaml`.
-
-Creating a policy requires the deterministic name enforced by the webhook:
-
-```sh
-# name = ssp- + first 12 hex of SHA-256 over the JSON array
-#        [namespace, schedulerName, serviceLabelKey, serviceLabelValue]
-kubectl -n production create -f - <<EOF
+# 1. Deployment 声明接管（schedulerName）
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: demo-web, namespace: default}
+spec:
+  replicas: 4
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: demo-web}   # 2. 服务标签
+    spec:
+      schedulerName: service-spread-scheduler      # 1. 接管声明
+      containers: [...]
+---
+# 3. 策略（名字必须是确定性名 ssp-<hash>，直接 apply 会被 webhook 拒绝并提示正确名字）
 apiVersion: scheduling.soyup.top/v1alpha1
 kind: ServiceSpreadPolicy
 metadata:
-  name: ssp-$(...computed...)
+  name: ssp-aa7b27a1fa82        # webhook 提示的确定性名
+  namespace: default
 spec:
   schedulerName: service-spread-scheduler
   serviceSelector:
-    matchLabels:
-      app.kubernetes.io/name: image-processing
+    matchLabels: {app.kubernetes.io/name: demo-web}
   maxSkew: 1
-  maxPodsPerNode: 9
-EOF
+  maxPodsPerNode: 2
 ```
 
-## Monitoring
+提示：先故意用错误名字 apply 一次，webhook 的报错会给出应用的确定性名（`ssp-` + JSON 规范化编码的 SHA-256 前 12 hex）。
 
-The scheduler process exports Prometheus metrics on `:9100/metrics` (see `cmd/scheduler/main.go`). The observer loop resolves every deployment's replica target (HPA → KEDA fallback → deployment replicas, with lastGood protection) and exports one series per (namespace, service, domain) every 30s.
+### 配置项
 
-**Observer metrics** (`internal/spread/replicatarget.go`):
+**ServiceSpreadPolicy（CRD，每服务一条）**——完整字段见 [api/v1alpha1](api/v1alpha1/types.go)：
 
-| Metric | Labels | Meaning |
+| 字段 | 含义 |
+| --- | --- |
+| `schedulerName` | 接管的调度器名，须与 scheduler profile 一致 |
+| `serviceSelector` | 单键 selector，选中即纳入该服务的聚合计数 |
+| `maxSkew` | 稳定均摊域内最大倾斜（硬约束） |
+| `maxPodsPerNode` | 每节点硬上限（跨域共享计数） |
+
+**ServiceSpreadArgs（scheduler 插件参数，config/scheduler/kubeconfig.yaml）**：
+
+| 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `service_spread_replica_target` | namespace, service, domain | Reported replica target with protective floor `max(desired, observedPods)` |
-| `service_spread_observed_pods` | namespace, service, domain | Pending+Running pods of the service (incl. unbound) |
-| `service_spread_bound_pods` | namespace, service, domain | Pods bound to nodes |
-| `service_spread_fallback_active` | namespace, service, domain | 1 when any replica-target component fell back (ReplicaTargetFallback or lastGood) |
-| `service_spread_capacity_deficit` | namespace, service | `HPA maxReplicas − eligibleNodes × maxPodsPerNode`, floored at 0; exported only when an HPA and an unambiguous policy exist for the service |
+| `serviceLabelKey` | 必填 | 服务标签键；受管 Pod 缺此标签一律拒绝 |
+| `requirePolicy` | `true` | 无策略命中的 Pod 拒绝调度（fail-closed） |
+| `managedSchedulerName` | `service-spread-scheduler` | profile 调度器名 |
+| `fallbackCacheTTL` | `10m` | 副本目标 lastGood 缓存上限（超时标记 stale 告警） |
+| `reservationTTL` | `5m` | Reserve 预占的兜底过期（janitor 逐条验证后释放，绝不盲删） |
+| `reconcilePeriod` | `10m` | 计数快照重建周期（只修漂移，不碰预占） |
+| `exportNodePods` | `false` | 调试指标 `service_spread_node_pods`（高基数，慎开） |
+| `exportTargetDetail` | `false` | 调试指标 `service_spread_replica_target_detail` |
 
-**Plugin metrics** (`internal/spread/plugin.go`):
+**共享配置**（config/manager/configmap.yaml）：`serviceLabelKey` 与 `managedSchedulerName`——webhook 与调度器共同读取；`serviceLabelKey` 必须与 Args 保持一致。
 
-| Metric | Labels | Meaning |
+### 镜像分发
+
+- 海外/可达 ghcr.io 的集群：`ghcr.io/cnyup/service-spread-scheduler/{scheduler,webhook}:vX.Y.Z`
+- **大陆集群（ACK 实测）**：ghcr 直拉会无限挂起；release workflow 自动双推阿里云 ACR 个人版 `registry.cn-hangzhou.aliyuncs.com/cnyup/{scheduler,webhook}`。**个人版「公有」仓库≠匿名可拉，必须配 imagePullSecret**——完整大陆部署路径见 [RUNBOOK §3](RUNBOOK.md)
+
+### 监控
+
+调度器在 `:9100` 暴露观测指标（`service_spread_replica_target` / `observed_pods` / `bound_pods` / `reservations` / `fallback_active` / `capacity_deficit`，插件侧 `filter_rejections_total{reason}` / `policy_resolution_failures_total{reason}`）。告警规则（4 条）在 config/monitoring/prometheusrule.yaml——**标签必须匹配你 Prometheus 的 ruleSelector，且规则须放在 operator 监听的 namespace**（ACK 实测：`prometheus: k8s` 标签 + monitoring ns → 4/4 加载）。健康判定看 leader Lease 的 `renewTime`，不是 `/healthz`（后者在调度卡死时仍存活）。详见 [RUNBOOK §5](RUNBOOK.md)。
+
+### 运维
+
+升级（RBAC 必须每次 re-apply——三次同族事故的教训）、回滚、故障排查、已知问题（KEDA 后装需重启、gauge 序列基数、RBAC 静默卡死、证书续期）见 RUNBOOK.md。发版流程见 hack/release-checklist.md。
+
+## 开发进度与技术栈
+
+### 里程碑
+
+| 里程碑 | 范围 | 状态 |
 | --- | --- | --- |
-| `service_spread_filter_rejections_total` | reason | PreFilter/Filter rejections by reason (`ServiceSpreadConstraint`, …) |
-| `service_spread_policy_resolution_failures_total` | reason | Policy resolution failures (`MissingRequiredServiceLabel`, `ServiceSpreadPolicyNotFound`, …) |
+| M1 | CRD / 配置 API / 策略 webhook（确定性命名+校验+重叠拒绝）/ CEL VAP 清单 | ✅ |
+| M2 | 配额/调度键、调度域哈希、COW 计数 + 预占状态机 | ✅ |
+| M3 | 调度插件全扩展点、EnqueueExtensions、集群事件 hints | ✅（kind e2e 矩阵 + 混沌 4/4） |
+| M4 | 副本目标观测器、容量告警、TTL janitor / reconciler 装配、生产清单 | ✅（告警三层验证 + ACK 真集群三项验证） |
 
-**Alerting** — `config/monitoring/prometheusrule.yaml` ships four rules matching the design doc (§10.3/§12.2):
+验收状态：设计文档验收标准 11/11 有证据（kind e2e + 混沌 + 单测），偏差表 14/14 落地。发版管线（ghcr 多架构 + ACR 大陆镜像）已在真实 tag 上全绿验证。
 
-- `ServiceSpreadCapacityDeficit` (warning): HPA maxReplicas exceeds what the eligible-node union can host at `maxPodsPerNode` — scaling up would leave pods permanently Pending.
-- `ServiceSpreadReplicaTargetFallback` (warning): replica-target reads fell back (HPA/KEDA unreadable, or lastGood) for 10m — the observer is running on degraded data.
-- `ServiceSpreadFilterRejectionRate` (warning): filter rejections sustained above 0.5/s for 10m — pods are systematically unschedulable under current spread constraints.
-- `ServiceSpreadObserverMetricsStale` (critical): `service_spread_replica_target` absent for 10m — the observer loop or the metrics endpoint is down.
+### 验证资产
 
-Note: prometheus-operator loads the PrometheusRule only when its `ruleSelector` matches the object's labels — adjust `release: kube-prometheus-stack` to your setup. Gauge rules aggregate with `max by (...)` and counter rules with `sum by (...)` because both scheduler replicas export the same series (leader and followers); `absent()` fires only on total loss — per-replica detection needs the instance/job label from your scrape config. `hack/e2e/verify-observer.sh` validates the export path end-to-end on a kind cluster (rebuild → rollout → port-forward → metric assertions); `hack/e2e/chaos.sh` runs the §8.4 failure drills.
+| 套件 | 内容 |
+| --- | --- |
+| `go test ./... -race` | 单元 + envtest 集成（webhook 准入矩阵、状态机并发原子性 16 goroutine） |
+| `hack/e2e/matrix.sh` | kind 验收矩阵（12 用例：接管/拒绝/聚合计数/跨域/并发上限/滚动升级/扩容回填…） |
+| `hack/e2e/chaos.sh` | 故障演练（调度器重启 / informer 冷启动 / KEDA absent / webhook 宕机） |
+| `hack/e2e/keda.sh` | 观测器 KEDA present 路径（自动检测后装 KEDA 并重启调度器） |
+| `internal/spread/rbac_expected_test.go` | RBAC 契约测试（代码访问面 vs 清单，防止权限漂移） |
 
-## Toolchain notes
+### 技术栈
 
-- `controller-gen` is pinned to **v0.16.5**: the 1.28-era v0.13.0 no longer
-  builds under Go ≥ 1.23 and its binaries do not run on macOS ≥ 26. Output is
-  standard `apiextensions.k8s.io/v1` and is exercised against the envtest
-  1.28 apiserver in `make test-integration`.
-- `setup-envtest` is installed `@latest` (standalone module): the
-  release-0.16 tag predates the GCS → GitHub-releases migration. On
-  darwin/arm64 `1.28.x` resolves to the 1.28.3 bundle, the last published for
-  that platform.
+- Go + Kubernetes scheduler framework（out-of-tree 插件，非 fork、非 extender）
+- controller-runtime v0.16.6 / client-go informer（版本锚定 k8s 1.28.15）
+- controller-gen（CRD 生成）、envtest（kube-apiserver 真进程集成测试）
+- Prometheus client_golang（观测指标）、keda.sh CRD（ScaledObject 动态 informer）
+- kind（e2e 真集群）、GitHub Actions（CI + 多架构发版 + ACR 大陆镜像双推）
+
+### 仓库结构
+
+```
+api/v1alpha1/            ServiceSpreadPolicy CRD
+apis/config/v1alpha1/    ServiceSpreadArgs（严格解码）
+cmd/scheduler|webhook/   入口
+internal/spread/         核心：keys / state（COW+预占）/ domain / plugin / lifecycle / replicatarget
+internal/webhook/        策略准入（确定性命名/校验/重叠拒绝/共享 ConfigMap fail-closed）
+config/                  部署清单（manager/rbac/webhook/monitoring）
+hack/e2e/                kind e2e 套件（bootstrap/matrix/chaos/keda/verify-observer）
+docs（根目录上级）        设计文档：方案 + 开发设计（含 §9 偏差表 14 条）
+```
+
+设计与开发文档（术语、规则边界、算法伪代码、测试矩阵）在仓库根的上级目录：`service-spread-scheduler-design.md`（方案）与 `service-spread-scheduler-dev-design.md`（开发设计）。

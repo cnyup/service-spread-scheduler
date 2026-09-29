@@ -101,6 +101,14 @@ func SetDefaults_ServiceSpreadArgs(args *ServiceSpreadArgs) {
 	if args.ReconcilePeriod.Duration == 0 {
 		args.ReconcilePeriod.Duration = DefaultReconcilePeriod
 	}
+	if args.ExportNodePods == nil {
+		exportNodePods := false
+		args.ExportNodePods = &exportNodePods
+	}
+	if args.ExportTargetDetail == nil {
+		exportTargetDetail := false
+		args.ExportTargetDetail = &exportTargetDetail
+	}
 }
 
 // ValidateServiceSpreadArgs checks fields that placement-critical code paths

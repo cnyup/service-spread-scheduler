@@ -75,4 +75,18 @@ type ServiceSpreadArgs struct {
 	// touches reservations. Defaults to 10m.
 	// +optional
 	ReconcilePeriod metav1.Duration `json:"reconcilePeriod,omitempty"`
+
+	// ExportNodePods enables the debug gauge
+	// service_spread_node_pods{namespace,service,domain,node}. High
+	// cardinality (one series per node per service); keep off on large
+	// clusters (design doc 10.2). Defaults to false.
+	// +optional
+	ExportNodePods *bool `json:"exportNodePods,omitempty"`
+
+	// ExportTargetDetail enables the debug gauge
+	// service_spread_replica_target_detail{namespace,service,domain,deployment,source}
+	// exposing each deployment's resolved target and source. Defaults to
+	// false.
+	// +optional
+	ExportTargetDetail *bool `json:"exportTargetDetail,omitempty"`
 }

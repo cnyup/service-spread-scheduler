@@ -59,6 +59,14 @@ type TargetSource interface {
 	ScaledObjectMinReplicas(namespace, deployment string) (int32, bool, error)
 }
 
+// DeploymentDetail is one replica_target_detail entry: the target value a
+// single deployment contributed and the source it resolved from.
+type DeploymentDetail struct {
+	Deployment string
+	Source     string
+	Value      int32
+}
+
 // DomainSeries is one exported sample per (namespace, service, domain).
 type DomainSeries struct {
 	Namespace       string
@@ -69,6 +77,11 @@ type DomainSeries struct {
 	BoundPods       int32 // bound-node count total
 	FallbackActive  bool  // reason=ReplicaTargetFallback on any component
 	CapacityDeficit int32 // HPA maxReplicas − eligibleNodes×maxPodsPerNode, floored at 0 (design 10.3); exported only when computable
+
+	// Debug expansions, populated ONLY when the corresponding Args switch is
+	// on (design doc 10.2: high-cardinality, off by default).
+	NodePods     map[string]int32   // node -> pods (labels add "node")
+	TargetDetail []DeploymentDetail // per-deployment target/source/value
 }
 
 // ObserverDeps carries observer configuration (mirrors ServiceSpreadArgs
@@ -81,6 +94,12 @@ type ObserverDeps struct {
 	Nodes                NodeReader
 	Policies             PolicyReader
 	ManagedSchedulerName string
+	// ExportNodePods / ExportDetail enable the high-cardinality debug gauges
+	// service_spread_node_pods{...,node} and
+	// service_spread_replica_target_detail{...,deployment,source}.
+	// Both default to false (design doc 10.2: 生产可选择不暴露 node).
+	ExportNodePods bool
+	ExportDetail   bool
 }
 
 // ReplicaTargetObserver resolves deployment targets and aggregates domain
@@ -188,6 +207,8 @@ type svcAgg struct {
 	fallback bool
 	hpaMax   int32 // max HPA MaxReplicas over the service's deployments; 0 = none
 	deps     []*appsv1.Deployment
+	detail   []DeploymentDetail
+	nodePods map[string]int32
 }
 
 // Compute resolves every deployment, groups pods to (namespace, service)
@@ -230,6 +251,11 @@ func (o *ReplicaTargetObserver) Compute(
 			}
 		}
 		aggs[key].deps = append(aggs[key].deps, dep)
+		if o.deps.ExportDetail {
+			aggs[key].detail = append(aggs[key].detail, DeploymentDetail{
+				Deployment: dep.Name, Source: string(src), Value: v,
+			})
+		}
 	}
 
 	for _, p := range pods {
@@ -247,6 +273,12 @@ func (o *ReplicaTargetObserver) Compute(
 		aggs[key].observed++
 		if p.Spec.NodeName != "" {
 			aggs[key].bound++
+			if o.deps.ExportNodePods {
+				if aggs[key].nodePods == nil {
+					aggs[key].nodePods = map[string]int32{}
+				}
+				aggs[key].nodePods[p.Spec.NodeName]++
+			}
 		}
 	}
 
@@ -266,6 +298,8 @@ func (o *ReplicaTargetObserver) Compute(
 			BoundPods:       a.bound,
 			FallbackActive:  a.fallback,
 			CapacityDeficit: deficit,
+			NodePods:        a.nodePods,
+			TargetDetail:    a.detail,
 		})
 	}
 	return series
@@ -340,6 +374,14 @@ var (
 		Name: "service_spread_reservations",
 		Help: "live pre-bind reservations per (namespace,service,domain): pods that passed Reserve but whose binding is not yet observed by the informer",
 	}, []string{"namespace", "service", "domain"})
+	nodePodsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "service_spread_node_pods",
+		Help: "per-node pod counts of the service domain (DEBUG: high-cardinality node label; enable via ServiceSpreadArgs.exportNodePods)",
+	}, []string{"namespace", "service", "domain", "node"})
+	targetDetailGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "service_spread_replica_target_detail",
+		Help: "per-deployment replica target and its source (DEBUG; enable via ServiceSpreadArgs.exportTargetDetail)",
+	}, []string{"namespace", "service", "domain", "deployment", "source"})
 	capacityDeficitGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "service_spread_capacity_deficit",
 		Help: "HPA maxReplicas minus eligible-node count times maxPodsPerNode, floored at 0",
@@ -347,7 +389,7 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(replicaTarget, observedPodsGauge, boundPodsGauge, fallbackActive, reservationsGauge, capacityDeficitGauge)
+	prometheus.MustRegister(replicaTarget, observedPodsGauge, boundPodsGauge, fallbackActive, reservationsGauge, nodePodsGauge, targetDetailGauge, capacityDeficitGauge)
 }
 
 // ReservationCounter exposes the live reservation overlay of the M2 state
@@ -394,6 +436,12 @@ func (o *ReplicaTargetObserver) ExportSeries(series []DomainSeries) {
 		fallbackActive.WithLabelValues(s.Namespace, s.Service, s.Domain).Set(f)
 		if s.CapacityDeficit > 0 {
 			capacityDeficitGauge.WithLabelValues(s.Namespace, s.Service).Set(float64(s.CapacityDeficit))
+		}
+		for node, n := range s.NodePods {
+			nodePodsGauge.WithLabelValues(s.Namespace, s.Service, s.Domain, node).Set(float64(n))
+		}
+		for _, d := range s.TargetDetail {
+			targetDetailGauge.WithLabelValues(s.Namespace, s.Service, s.Domain, d.Deployment, d.Source).Set(float64(d.Value))
 		}
 	}
 }
@@ -503,6 +551,10 @@ type ObserverLoopDeps struct {
 	// Reservations exposes the live reservation overlay (nil skips the
 	// service_spread_reservations export — unit-test deployments).
 	Reservations ReservationCounter
+	// Debug-gauge switches (ServiceSpreadArgs.exportNodePods /
+	// exportTargetDetail); both default to false (design 10.2).
+	ExportNodePods     bool
+	ExportTargetDetail bool
 	// Nodes + Policies + ManagedSchedulerName enable the capacity-deficit
 	// export (design 10.3); nil Nodes/Policies skips it.
 	Nodes                NodeReader
@@ -520,6 +572,8 @@ func RunObserverLoop(ctx context.Context, d ObserverLoopDeps) {
 		Nodes:                d.Nodes,
 		Policies:             d.Policies,
 		ManagedSchedulerName: d.ManagedSchedulerName,
+		ExportNodePods:       d.ExportNodePods,
+		ExportDetail:         d.ExportTargetDetail,
 	})
 	interval := d.ExportInterval
 	if interval <= 0 {

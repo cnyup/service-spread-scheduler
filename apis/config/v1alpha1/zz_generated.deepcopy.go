@@ -33,6 +33,16 @@ func (in *ServiceSpreadArgs) DeepCopyInto(out *ServiceSpreadArgs) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.ExportNodePods != nil {
+		in, out := &in.ExportNodePods, &out.ExportNodePods
+		*out = new(bool)
+		**out = **in
+	}
+	if in.ExportTargetDetail != nil {
+		in, out := &in.ExportTargetDetail, &out.ExportTargetDetail
+		*out = new(bool)
+		**out = **in
+	}
 	out.FallbackCacheTTL = in.FallbackCacheTTL
 	out.ReservationTTL = in.ReservationTTL
 	out.ReconcilePeriod = in.ReconcilePeriod
