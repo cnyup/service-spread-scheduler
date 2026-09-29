@@ -25,18 +25,31 @@ Kubernetes out-of-tree 自定义调度器：按「namespace + 服务标签 + 调
 ### 安装（推荐：Helm）
 
 ```bash
-# 大陆 ACK 集群（一条命令；镜像走 ACR，需先建 pullSecret）
-kubectl create secret docker-registry acr-regcred \
-  --docker-server=registry.cn-hangzhou.aliyuncs.com \
-  --docker-username=<你的ACR用户名> --docker-password=<固定密码> \
-  -n service-spread-system --dry-run=client -o yaml | kubectl apply -f -
+# 大陆 ACK 集群（镜像走 ACR）：预建 ns → install → secret → 滚动
+kubectl create ns service-spread-system
 helm install ssp charts/service-spread-scheduler -f charts/service-spread-scheduler/values-acr.yaml
+kubectl -n service-spread-system create secret docker-registry acr-regcred \
+  --docker-server=registry.cn-hangzhou.aliyuncs.com \
+  --docker-username=<你的ACR用户名> --docker-password=<固定密码>
+# ACR 私有仓库所有拉取都要认证：滚动系统组件 + 给 ns 默认 SA 挂凭证
+kubectl -n service-spread-system rollout restart deploy/service-spread-scheduler deploy/service-spread-webhook
+kubectl -n service-spread-system patch serviceaccount default \
+  -p '{"imagePullSecrets":[{"name":"acr-regcred"}]}'
 
 # 海外集群（默认 values，ghcr 镜像，无需 secret）
+kubectl create ns service-spread-system
 helm install ssp charts/service-spread-scheduler
 ```
 
-注意：`values-acr.yaml` 里的 `namespace: service-spread-system` 是 Helm create 的，pullSecret 需在 install 前存在于其中——先手动 `kubectl create ns service-spread-system` 再建 secret 再 install（Helm 对已存在 ns 无冲突）。CRD 走 chart 的 `crds/` 目录（install 时自动装、**upgrade 不更新**——schema 变更时手动 `kubectl apply --server-side -f charts/service-spread-scheduler/crds/`）。证书默认自签（零依赖），`webhook.certSource: certManager` 可切换。改参数示例：`helm upgrade ssp charts/... --set scheduler.args.exportNodePods=true`（kubeconfig 变更自动滚动 Pod）。
+说明：
+- **预建 ns（kubectl）是实测的可靠路径**：chart 不渲染 Namespace 对象（曾与预建 ns 的 helm ownership 冲突）；`--create-namespace` 在带 OpenYurt 控制面的 ACK 上与 ns 管控存在兼容问题（ACK 2026-09-29 实测 11 资源全报 ns not found），故文档统一预建。
+- **同 ns 的测试/业务负载拉 ACR 也需认证**：建好 secret 后补一条命令，把 ns 的 default ServiceAccount 挂上凭证（后续负载无需逐个配 imagePullSecrets）：
+  ```bash
+  kubectl -n service-spread-system patch serviceaccount default \
+    -p '{"imagePullSecrets":[{"name":"acr-regcred"}]}'
+  ```
+- CRD 走 chart 的 `crds/` 目录（install 时自动装、**upgrade 不更新**——schema 变更时手动 `kubectl apply --server-side -f charts/service-spread-scheduler/crds/`）。
+- 证书默认自签（零依赖），`webhook.certSource: certManager` 可切换。改参数示例：`helm upgrade ssp charts/... --set scheduler.args.exportNodePods=true`（kubeconfig 变更自动滚动 Pod）。
 
 #### Helm values 配置项完整参考
 

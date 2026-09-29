@@ -69,3 +69,11 @@ prometheusRule:
 rbac:
   # Aggregates the scheduler ClusterRole into these admin/view roles.
   aggregateToAdminView: false
+
+# DOC-ONLY reminder (no template renders from this): ACR personal edition
+# is never anonymously pullable — workloads sharing the release namespace
+# need the credential too. After creating the pullSecret, ALSO patch the
+# namespace default ServiceAccount (one command, see README/RUNBOOK):
+#   kubectl -n <ns> patch serviceaccount default \
+#     -p '{"imagePullSecrets":[{"name":"acr-regcred"}]}'
+defaultImagePullSecrets: []

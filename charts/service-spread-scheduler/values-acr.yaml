@@ -33,3 +33,6 @@ prometheusRule:
   labels:
     prometheus: k8s       # ACK ruleSelector (adjust to your instance)
   namespace: monitoring   # operator watches its own ns only (nil selector)
+
+# Workload pulls: patch the default SA after install (README step 3).
+# defaultImagePullSecrets: [{name: acr-regcred}]

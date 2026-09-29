@@ -29,8 +29,24 @@ for 1.30+).
 ## 2bis. Helm install (preferred)
 
 ```bash
-helm install ssp charts/service-spread-scheduler -f charts/service-spread-scheduler/values-acr.yaml
+# Pre-create the namespace with kubectl (verified reliable on ACK with
+# OpenYurt: --create-namespace raced the namespace controller there and
+# all 11 resources failed with ns-not-found, 2026-09-29). The chart
+# deliberately renders NO Namespace object.
+kubectl create ns service-spread-system
+helm install ssp charts/service-spread-scheduler \
+  -f charts/service-spread-scheduler/values-acr.yaml
+# ACR personal edition needs auth for every pull: create the secret, then
+# roll the system deployments once so they pick it up.
+kubectl -n service-spread-system create secret docker-registry acr-regcred \
+  --docker-server=registry.cn-hangzhou.aliyuncs.com \
+  --docker-username=<user> --docker-password=<password>
+kubectl -n service-spread-system rollout restart deploy/service-spread-scheduler deploy/service-spread-webhook
 ```
+
+Workloads sharing the namespace: `defaultImagePullSecrets` in the values
+patches the namespace's default ServiceAccount, so test/business pods
+pull from ACR without per-workload imagePullSecrets.
 
 Helm replaces the ordered steps below (2.1-2.10 fold into one command:
 ordering, RBAC re-apply on upgrade, and cert readiness are handled by
