@@ -1,0 +1,153 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: servicespreadpolicies.scheduling.soyup.top
+spec:
+  group: scheduling.soyup.top
+  names:
+    kind: ServiceSpreadPolicy
+    listKind: ServiceSpreadPolicyList
+    plural: servicespreadpolicies
+    shortNames:
+    - ssp
+    singular: servicespreadpolicy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.schedulerName
+      name: Scheduler
+      type: string
+    - jsonPath: .spec.maxSkew
+      name: Max Skew
+      type: integer
+    - jsonPath: .spec.maxPodsPerNode
+      name: Max Pods/Node
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ServiceSpreadPolicy declares the spread constraints applied to all pods of
+          one service: the pods in one namespace that carry the cluster-wide
+          configured service label with a given value and that specify the managed
+          scheduler in `spec.schedulerName`.
+
+          The object name is deterministic (`ssp-` + 12 hex of the service identity)
+          and is enforced by the validating webhook, which also enforces the
+          selector single-key rule that cannot be expressed in the structural schema.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: Desired spread behaviour for the selected service.
+            properties:
+              maxPodsPerNode:
+                description: |-
+                  MaxPodsPerNode is the absolute per-node cap of same-service pods,
+                  counted per service quota key and shared across all scheduling domains
+                  of the service (design doc 7.1). Must be >= 1. HPA scale-up targets
+                  never bypass this cap; scale beyond `eligibleNodes * maxPodsPerNode`
+                  is surfaced by capacity alerting instead.
+                format: int32
+                minimum: 1
+                type: integer
+              maxSkew:
+                description: |-
+                  MaxSkew is the maximum allowed difference of same-service pod count
+                  between any two nodes of the stable spread domain (including the pod
+                  being placed). Must be >= 1: with the hard inequality enforced by the
+                  plugin, maxSkew=0 could not place even the first pod into an empty
+                  domain (design doc 4.2).
+                format: int32
+                minimum: 1
+                type: integer
+              schedulerName:
+                description: |-
+                  SchedulerName must exactly match `spec.schedulerName` of the pods this
+                  policy selects, and must equal the managed scheduler name configured
+                  cluster-wide (shared ConfigMap `service-spread-scheduler-config`).
+                  Pods scheduled by any other scheduler never match this policy.
+                minLength: 1
+                type: string
+              serviceSelector:
+                description: |-
+                  ServiceSelector selects the pods of the service.
+
+                  First release supports exact label matching only: MatchLabels must
+                  contain exactly one entry whose key equals the cluster-wide configured
+                  serviceLabelKey, and MatchExpressions must be empty. Both rules are
+                  enforced by the validating webhook because serviceLabelKey is cluster
+                  level configuration and cannot be baked into the structural schema.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: |-
+                        A label selector requirement is a selector that contains values, a key, and an operator that
+                        relates the key and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: |-
+                            operator represents a key's relationship to a set of values.
+                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                          type: string
+                        values:
+                          description: |-
+                            values is an array of string values. If the operator is In or NotIn,
+                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                            the values array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                    type: object
+                type: object
+                x-kubernetes-map-type: atomic
+            required:
+            - maxPodsPerNode
+            - maxSkew
+            - schedulerName
+            - serviceSelector
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}

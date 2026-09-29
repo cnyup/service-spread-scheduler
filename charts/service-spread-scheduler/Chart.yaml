@@ -1,0 +1,13 @@
+apiVersion: v2
+name: service-spread-scheduler
+description: |
+  Out-of-tree Kubernetes scheduler enforcing maxSkew balancing and a
+  cross-domain maxPodsPerNode hard cap per service (namespace + service
+  label), with a validating policy webhook (deterministic naming,
+  self-signed certificates) and a replica-target observer.
+type: application
+version: 0.1.0
+appVersion: "v0.1.0"
+home: https://github.com/cnyup/service-spread-scheduler
+sources:
+  - https://github.com/cnyup/service-spread-scheduler

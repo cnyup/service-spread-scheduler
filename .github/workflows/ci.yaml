@@ -67,6 +67,18 @@ jobs:
           print(f"OK: {len(files)} manifests parse")
           PY
 
+      - name: Helm chart lint + template smoke
+        run: |
+          curl -sSL https://get.helm.sh/helm-v3.15.4-linux-amd64.tar.gz | tar xz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
+          helm lint charts/service-spread-scheduler
+          # default + ACR + toggled renders must all succeed
+          helm template ssp charts/service-spread-scheduler > /dev/null
+          helm template ssp charts/service-spread-scheduler \
+            -f charts/service-spread-scheduler/values-acr.yaml > /dev/null
+          helm template ssp charts/service-spread-scheduler \
+            --set vap.enabled=true --set prometheusRule.enabled=true > /dev/null
+
       - name: Shellcheck e2e scripts (non-fatal)
         run: |
           # syntax check only: shellcheck is not guaranteed on the runner

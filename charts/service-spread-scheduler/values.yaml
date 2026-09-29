@@ -1,0 +1,71 @@
+# Default values — ghcr.io path (reachable outside mainland China).
+# Mainland ACK clusters: see values-acr.yaml.
+global:
+  namespace: service-spread-system
+
+  # SchedulerName is the schedulerName pods opt in with AND the profile
+  # name; changing it after policies exist requires migrating them.
+  schedulerName: service-spread-scheduler
+
+  # ServiceLabelKey must match in BOTH the plugin args and the shared
+  # ConfigMap the webhook reads — the chart injects the same value into
+  # both, which is exactly the sync hazard this removes.
+  serviceLabelKey: app.kubernetes.io/name
+
+scheduler:
+  image:
+    registry: ghcr.io/cnyup/service-spread-scheduler
+    repository: scheduler
+    tag: ""            # defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+  replicas: 2
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 384Mi}
+  # ServiceSpreadArgs (strict-decoded; unknown fields fail the pod).
+  args:
+    requirePolicy: true
+    fallbackCacheTTL: 10m
+    reservationTTL: 5m
+    reconcilePeriod: 10m
+    exportNodePods: false       # debug gauge, high cardinality
+    exportTargetDetail: false   # debug gauge
+  imagePullSecrets: []          # e.g. [{name: acr-regcred}]
+
+webhook:
+  image:
+    registry: ghcr.io/cnyup/service-spread-scheduler
+    repository: webhook
+    tag: ""            # defaults to Chart.appVersion
+    pullPolicy: IfNotPresent
+  replicas: 2
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+  imagePullSecrets: []
+  # certSource: selfSign (in-process, zero dependencies — default) or
+  # certManager (requires cert-manager CRDs AND removes the self-sign flags
+  # below; do NOT run both, they would fight over the serving Secret).
+  certSource: selfSign
+  # Injected only when certSource == certManager; keeps caBundle fresh.
+  certManager:
+    recreate: true
+
+# ValidatingAdmissionPolicy blocking preset spec.nodeName on managed pods.
+# Requires the 1.28 feature-gate pair on kube-apiserver (RUNBOOK §4);
+# leave disabled on clusters that cannot set apiserver flags.
+vap:
+  enabled: false
+
+# PrometheusRule with the four ServiceSpread alerts.
+prometheusRule:
+  enabled: false
+  # MUST match your Prometheus ruleSelector AND the namespace must be one
+  # the operator watches (ruleNamespaceSelector nil = its own namespace
+  # only — verified on ACK). Typical ACK: prometheus: k8s + monitoring ns.
+  labels: {}
+  namespace: ""      # empty = release namespace
+
+rbac:
+  # Aggregates the scheduler ClusterRole into these admin/view roles.
+  aggregateToAdminView: false

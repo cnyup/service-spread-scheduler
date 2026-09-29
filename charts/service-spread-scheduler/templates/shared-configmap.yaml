@@ -1,0 +1,16 @@
+{{/*
+Shared cluster-level config read by BOTH the webhook (fail-closed until
+present) and, for reference, tooling. serviceLabelKey here must equal the
+plugin args value — the chart injects the same .Values key into both,
+removing the manual-sync hazard entirely.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: service-spread-scheduler-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: service-spread-scheduler
+data:
+  serviceLabelKey: {{ .Values.global.serviceLabelKey | quote }}
+  managedSchedulerName: {{ .Values.global.schedulerName | quote }}

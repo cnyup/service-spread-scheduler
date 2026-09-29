@@ -1,0 +1,88 @@
+# Minimal RBAC for the ServiceSpread scheduler (e2e bootstrap subset of
+# dev-design §7.3/M4 production manifests). Scoped to the exact verbs the
+# M3 plugin + state machine needs; expand before production hardening.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: service-spread-scheduler
+rules:
+  # Scheduler bind loop: bind pods, patch status, emit scheduling events.
+  - apiGroups: [""]
+    resources: [pods/binding, pods/status]
+    verbs: [create, patch, update]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch, update]
+  # Spread state machine: informers list/watch pods + nodes everywhere.
+  - apiGroups: [""]
+    resources: [pods, nodes]
+    verbs: [get, list, watch]
+  # Scheduling diagnostics: the 1.28 event recorder PATCHes aggregated
+  # events via the events.k8s.io API group; the core "" events rule above
+  # is NOT enough — without this the broadcaster logs "Server rejected
+  # event ... will not retry" and FailedScheduling diagnostics never reach
+  # kubectl describe (found by e2e matrix case 6 on kind).
+  - apiGroups: ["events.k8s.io"]
+    resources: [events]
+    verbs: [create, patch, update]
+  # Native kube-scheduler informer surface (VolumeBinding, PDB etc.) — the
+  # binary watches these regardless of which plugins our profile enables;
+  # without them the reflectors spam errors and native filter plugins fail.
+  - apiGroups: [""]
+    resources: [persistentvolumes, persistentvolumeclaims, replicationcontrollers, services, endpoints, namespaces, configmaps]
+    verbs: [get, list, watch]
+  - apiGroups: ["storage.k8s.io"]
+    resources: [csidrivers, csinodes, csistoragecapacities, storageclasses, volumeattachments]
+    verbs: [get, list, watch]
+  - apiGroups: ["policy"]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch]
+  # Leader election Lease (KubeSchedulerConfiguration.leaderElection).
+  - apiGroups: ["coordination.k8s.io"]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Policy resolution via dynamic informer (unstructured reads).
+  - apiGroups: ["scheduling.soyup.top"]
+    resources: [servicespreadpolicies]
+    verbs: [get, list, watch]
+  # OwnerReader: Pod -> ReplicaSet -> Deployment chain for workload-kind
+  # classification (UnsupportedWorkloadOwner rejection path).
+  - apiGroups: ["apps"]
+    resources: [replicasets, deployments, statefulsets]
+    verbs: [get, list, watch]
+  # M4 observer: HPA informer (autoscaling/v2).
+  - apiGroups: ["autoscaling"]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  # M4 observer: KEDA ScaledObject dynamic informer (keda.sh/v1alpha1).
+  # On clusters WITHOUT KEDA the discovery probe short-circuits (group not
+  # registered -> "absent"), so a missing rule is invisible there; on
+  # KEDA-equipped clusters the rule is what separates "absent" from
+  # "degraded" (registered but unreadable) — without it the observer
+  # falsely reports degraded and falls back. Found by the RBAC contract
+  # test's RED run (rbac_expected_test.go).
+  - apiGroups: ["keda.sh"]
+    resources: [scaledobjects]
+    verbs: [list, watch]
+  # Custom GVK enqueue hints use metadata only; covered by the watches above.
+  # Events for scheduling diagnostics are emitted by kube-scheduler itself
+  # (system: kube-scheduler), not by this plugin — no Events verb needed.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: service-spread-scheduler
+  namespace: "{{ .Values.global.namespace }}"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: service-spread-scheduler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: service-spread-scheduler
+subjects:
+  - kind: ServiceAccount
+    name: service-spread-scheduler
+    namespace: "{{ .Values.global.namespace }}"

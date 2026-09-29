@@ -1,0 +1,9 @@
+{{/*
+Optional VAP (block preset nodeName on managed pods). 1.28 requires BOTH
+apiserver feature gates (RUNBOOK §4); 1.30+ switches apiVersion to v1.
+The scheduler-name literals inside the CEL expressions are templated to
+global.schedulerName — the sync constraint called out in the raw manifest.
+*/}}
+{{- if .Values.vap.enabled }}
+{{ tpl (.Files.Get "files/vap.yaml") . }}
+{{- end }}

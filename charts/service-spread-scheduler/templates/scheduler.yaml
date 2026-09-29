@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: service-spread-scheduler-kubeconfig
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: service-spread-scheduler
+data:
+  config.yaml: |
+{{ include "service-spread-scheduler.kubeconfig" . | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-spread-scheduler
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: service-spread-scheduler
+spec:
+  replicas: {{ .Values.scheduler.replicas }}
+  selector:
+    matchLabels:
+      app: service-spread-scheduler
+  template:
+    metadata:
+      labels:
+        app: service-spread-scheduler
+      annotations:
+        # Roll pods when the kubeconfig ConfigMap changes (strict args are
+        # read once at startup; without this, `helm upgrade` arg changes
+        # never take effect on running pods).
+        checksum/config: {{ include (print $.Template.BasePath "/shared-configmap.yaml") . | sha256sum }}{{ include "service-spread-scheduler.kubeconfig" . | sha256sum }}
+    spec:
+      serviceAccountName: service-spread-scheduler
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: service-spread-scheduler
+      {{- with .Values.scheduler.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: kube-scheduler
+          image: "{{ .Values.scheduler.image.registry }}/{{ .Values.scheduler.image.repository }}:{{ .Values.scheduler.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.scheduler.image.pullPolicy }}
+          command: ["/usr/local/bin/kube-scheduler"]
+          args:
+            - --config=/etc/kube-scheduler/config.yaml
+            - -v=2
+          volumeMounts:
+            - name: scheduler-config
+              mountPath: /etc/kube-scheduler
+              readOnly: true
+          ports:
+            - name: obs-metrics
+              containerPort: 9100
+            - name: health
+              containerPort: 10259
+          readinessProbe:
+            httpGet: {path: /healthz, port: 10259, scheme: HTTPS}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: 10259, scheme: HTTPS}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
+      volumes:
+        - name: scheduler-config
+          configMap:
+            name: service-spread-scheduler-kubeconfig
+---
+# PDB: one scheduler replica survives voluntary disruption; the leader
+# lease re-elects within 15s when the leader pod is the one evicted.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: service-spread-scheduler
+  namespace: {{ .Values.global.namespace }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: service-spread-scheduler

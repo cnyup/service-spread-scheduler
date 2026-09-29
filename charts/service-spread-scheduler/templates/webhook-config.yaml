@@ -1,0 +1,56 @@
+{{/*
+ValidatingWebhookConfiguration. With certSource == selfSign the caBundle
+starts EMPTY and is patched by the in-process rotator within seconds of
+the leader election; until then policy writes fail closed (by design).
+With certManager the inject-ca-from annotation lets cainjector fill it.
+*/}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: service-spread-policy-validator
+  {{- if eq .Values.webhook.certSource "certManager" }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Values.global.namespace }}/service-spread-webhook-serving-cert
+  {{- end }}
+webhooks:
+  - name: validate.servicespreadpolicy.scheduling.soyup.top
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Fail
+    rules:
+      - apiGroups: [scheduling.soyup.top]
+        apiVersions: [v1alpha1]
+        operations: [CREATE, UPDATE]
+        # Case-sensitive CRD plural (NOT the Kind).
+        resources: [servicespreadpolicies]
+        scope: Namespaced
+    clientConfig:
+      service:
+        name: service-spread-webhook-service
+        namespace: {{ .Values.global.namespace }}
+        path: /validate-scheduling-soyup-top-v1alpha1-servicespreadpolicy
+        port: 443
+{{- if eq .Values.webhook.certSource "certManager" }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: service-spread-webhook-selfsigned-issuer
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: service-spread-webhook-serving-cert
+  namespace: {{ .Values.global.namespace }}
+spec:
+  dnsNames:
+    - service-spread-webhook-service.{{ .Values.global.namespace }}.svc
+    - service-spread-webhook-service.{{ .Values.global.namespace }}.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: service-spread-webhook-selfsigned-issuer
+  secretName: service-spread-webhook-serving-cert
+{{- end }}

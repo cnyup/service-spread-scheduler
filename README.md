@@ -22,6 +22,24 @@ Kubernetes out-of-tree 自定义调度器：按「namespace + 服务标签 + 调
 
 ## 使用与部署
 
+### 安装（推荐：Helm）
+
+```bash
+# 大陆 ACK 集群（一条命令；镜像走 ACR，需先建 pullSecret）
+kubectl create secret docker-registry acr-regcred \
+  --docker-server=registry.cn-hangzhou.aliyuncs.com \
+  --docker-username=<你的ACR用户名> --docker-password=<固定密码> \
+  -n service-spread-system --dry-run=client -o yaml | kubectl apply -f -
+helm install ssp charts/service-spread-scheduler -f charts/service-spread-scheduler/values-acr.yaml
+
+# 海外集群（默认 values，ghcr 镜像，无需 secret）
+helm install ssp charts/service-spread-scheduler
+```
+
+注意：`values-acr.yaml` 里的 `namespace: service-spread-system` 是 Helm create 的，pullSecret 需在 install 前存在于其中——先手动 `kubectl create ns service-spread-system` 再建 secret 再 install（Helm 对已存在 ns 无冲突）。CRD 走 chart 的 `crds/` 目录（install 时自动装、**upgrade 不更新**——schema 变更时手动 `kubectl apply --server-side -f charts/service-spread-scheduler/crds/`）。证书默认自签（零依赖），`webhook.certSource: certManager` 可切换。改参数示例：`helm upgrade ssp charts/... --set scheduler.args.exportNodePods=true`（kubeconfig 变更自动滚动 Pod）。
+
+<details><summary>裸清单安装（无 Helm）</summary>
+
 ### 前置要求
 
 - Kubernetes 1.28.x（1.30+ 可用，VAP 清单需升 v1，见 [RUNBOOK §4](RUNBOOK.md)）
@@ -51,6 +69,8 @@ kubectl apply -f config/manager/scheduler.yaml
 # VAP（可选：阻止受管 Pod 预设 nodeName 绕过；1.28 需开双 feature gate）
 kubectl apply -f config/manager/vap-block-preset-nodename.yaml
 ```
+
+</details>
 
 ### 使用：三步接入一个服务
 

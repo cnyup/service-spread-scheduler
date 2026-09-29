@@ -1,0 +1,10 @@
+{{/*
+RBAC rendered from verbatim copies of config/rbac/{scheduler,webhook}.yaml
+(namespace templated). Keeping the chart a pure copy (not a rewrite) means
+the RBAC contract test (internal/spread/rbac_expected_test.go) keeps
+guarding the exact rules the chart ships. Sync asserted by
+hack/verify-chart.sh.
+*/}}
+{{ tpl (.Files.Get "files/rbac-scheduler.yaml") . }}
+---
+{{ tpl (.Files.Get "files/rbac-webhook.yaml") . }}

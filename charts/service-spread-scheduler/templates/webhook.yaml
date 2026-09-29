@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-spread-webhook-service
+  namespace: {{ .Values.global.namespace }}
+spec:
+  selector:
+    app: service-spread-webhook
+  ports:
+    - name: https
+      port: 443
+      targetPort: 9443
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-spread-webhook
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: service-spread-webhook
+spec:
+  replicas: {{ .Values.webhook.replicas }}
+  selector:
+    matchLabels:
+      app: service-spread-webhook
+  template:
+    metadata:
+      labels:
+        app: service-spread-webhook
+    spec:
+      serviceAccountName: service-spread-webhook
+      {{- with .Values.webhook.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: webhook
+          image: "{{ include "service-spread-scheduler.webhookImage" . }}"
+          imagePullPolicy: {{ .Values.webhook.image.pullPolicy }}
+          args:
+            - --config-map-namespace={{ .Values.global.namespace }}
+            - --config-map-name=service-spread-scheduler-config
+            - --webhook-cert-dir=/tmp/k8s-webhook-server/serving-certs
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+            {{- if eq .Values.webhook.certSource "selfSign" }}
+            # KEDA-style in-process certificates: the leader replica
+            # issues/rotates the serving pair and patches the caBundle.
+            # Cold start: volume below is optional; the process issues the
+            # Secret synchronously then restarts onto the mounted volume.
+            - --leader-elect
+            - --self-sign-certs
+            {{- else if eq .Values.webhook.certSource "certManager" }}
+            - --leader-elect   # still elected: harmless, keeps single writer
+            {{- else }}
+            {{- fail "webhook.certSource must be selfSign or certManager" }}
+            {{- end }}
+          env:
+            - name: WEBHOOK_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: webhook
+              containerPort: 9443
+            - name: metrics
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /readyz/shared-config, port: 8081}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8081}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.webhook.resources | nindent 12 }}
+          volumeMounts:
+            - name: serving-cert
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+      volumes:
+        - name: serving-cert
+          {{- if eq .Values.webhook.certSource "selfSign" }}
+          secret:
+            secretName: service-spread-webhook-serving-cert
+            optional: true   # cold-start chicken-and-egg; see main.go
+          {{- else }}
+          secret:
+            secretName: service-spread-webhook-serving-cert
+          {{- end }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: service-spread-webhook
+  namespace: {{ .Values.global.namespace }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: service-spread-webhook

@@ -26,6 +26,35 @@ for 1.30+).
 - cert-manager **or** a manual certificate path for the webhook serving
   cert (step 3).
 
+## 2bis. Helm install (preferred)
+
+```bash
+helm install ssp charts/service-spread-scheduler -f charts/service-spread-scheduler/values-acr.yaml
+```
+
+Helm replaces the ordered steps below (2.1-2.10 fold into one command:
+ordering, RBAC re-apply on upgrade, and cert readiness are handled by
+the chart and the in-process self-sign rotator). Notes:
+
+- CRD lives in the chart's `crds/` dir: installed on first install,
+  NOT updated on upgrade — schema changes need
+  `kubectl apply --server-side -f charts/service-spread-scheduler/crds/`.
+- `helm upgrade` re-applies RBAC every time (the drift family killed
+  by this is documented in §2.3 below).
+- kubeconfig arg changes roll the scheduler automatically (checksum
+  annotation on the pod template).
+- Uninstall keeps the CRD (`crds/` semantics) — remove manually with
+  kubectl when the API surface is truly retired.
+- A FAILED first install can leave an unlabeled CRD that blocks
+  retries with an ownership error (helm pre-flight): delete the CRD
+  (`kubectl delete crd servicespreadpolicies.scheduling.soyup.top`)
+  and retry — observed on helm 3.15.4 during the 2026-09-29 validation.
+
+Full lifecycle verified live on ACK (2026-09-29): install (ACR images,
+self-sign cold start converged after 2 restarts), upgrade with arg
+change (exportNodePods -> node_pods series live, including other
+labeled workloads on the cluster), rollback, uninstall clean.
+
 ## 2. Install order
 
 The order matters: the webhook's ConfigMap readiness gate and the
