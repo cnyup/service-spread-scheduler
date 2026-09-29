@@ -3,6 +3,7 @@ package spread
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -335,6 +336,10 @@ var (
 		Name: "service_spread_fallback_active",
 		Help: "1 when any replica-target component fell back (ReplicaTargetFallback or lastGood)",
 	}, []string{"namespace", "service", "domain"})
+	reservationsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "service_spread_reservations",
+		Help: "live pre-bind reservations per (namespace,service,domain): pods that passed Reserve but whose binding is not yet observed by the informer",
+	}, []string{"namespace", "service", "domain"})
 	capacityDeficitGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "service_spread_capacity_deficit",
 		Help: "HPA maxReplicas minus eligible-node count times maxPodsPerNode, floored at 0",
@@ -342,7 +347,38 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(replicaTarget, observedPodsGauge, boundPodsGauge, fallbackActive, capacityDeficitGauge)
+	prometheus.MustRegister(replicaTarget, observedPodsGauge, boundPodsGauge, fallbackActive, reservationsGauge, capacityDeficitGauge)
+}
+
+// ReservationCounter exposes the live reservation overlay of the M2 state
+// machine to the observer loop. quotaKey format: ns/schedulerName/labelKey=labelValue.
+type ReservationCounter interface {
+	ReservationCounts() map[string]int32
+}
+
+// ExportReservations pushes the live per-quotaKey reservation counts into the
+// gauge, zero-exporting every service present in series (a drain to zero must
+// be observable, mirroring the other gauges). Malformed quotaKeys are skipped.
+func ExportReservations(rc ReservationCounter, series []DomainSeries) {
+	if rc == nil {
+		return
+	}
+	bySvc := map[[2]string]int32{}
+	for qk, n := range rc.ReservationCounts() {
+		// quotaKey = ns + "/" + schedulerName + "/" + labelKey + "=" + labelValue.
+		// ns is the FIRST path segment; labelKey may itself contain slashes
+		// (e.g. app.kubernetes.io/name), so LastIndex would misparse.
+		eq := strings.LastIndex(qk, "=")
+		slash := strings.Index(qk, "/")
+		if eq < 0 || slash < 0 || slash > eq {
+			continue
+		}
+		bySvc[[2]string{qk[:slash], qk[eq+1:]}] = n
+	}
+	for _, s := range series {
+		n := bySvc[[2]string{s.Namespace, s.Service}]
+		reservationsGauge.WithLabelValues(s.Namespace, s.Service, s.Domain).Set(float64(n))
+	}
 }
 
 // ExportSeries pushes one Compute round into the prometheus gauges.
@@ -464,6 +500,9 @@ type ObserverLoopDeps struct {
 	TargetSource
 	ServiceLabelKey string
 	ExportInterval  time.Duration
+	// Reservations exposes the live reservation overlay (nil skips the
+	// service_spread_reservations export — unit-test deployments).
+	Reservations ReservationCounter
 	// Nodes + Policies + ManagedSchedulerName enable the capacity-deficit
 	// export (design 10.3); nil Nodes/Policies skips it.
 	Nodes                NodeReader
@@ -505,7 +544,9 @@ func RunObserverLoop(ctx context.Context, d ObserverLoopDeps) {
 			klog.Background().Error(err, "observer: list pods")
 			return
 		}
-		ob.ExportSeries(ob.Compute(deps, svcOf, pods))
+		series := ob.Compute(deps, svcOf, pods)
+		ob.ExportSeries(series)
+		ExportReservations(d.Reservations, series)
 	}
 	export() // first cycle immediately at startup
 	for {

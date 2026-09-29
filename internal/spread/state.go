@@ -227,6 +227,20 @@ func (s *spreadState) reservationsLen() int {
 	return len(s.resv)
 }
 
+// ReservationCounts aggregates the live reservations per quotaKey (design
+// doc 10.2 service_spread_reservations). Called by the observer loop from
+// its own goroutine; the mutex makes the copy safe against concurrent
+// Reserve/Unreserve.
+func (s *spreadState) ReservationCounts() map[string]int32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]int32, len(s.resv))
+	for _, r := range s.resv {
+		out[r.QuotaKey]++
+	}
+	return out
+}
+
 // reservationPhase is a test/observability helper; returns (-1, false) when
 // no reservation exists.
 func (s *spreadState) reservationPhase(uid types.UID) (resvPhase, bool) {

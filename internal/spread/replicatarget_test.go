@@ -368,3 +368,37 @@ func TestCompute_CapacityDeficitSkippedWithoutPolicy(t *testing.T) {
 		t.Fatalf("want deficit=0 when no policy matches (gauge untouched), got %d", series[0].CapacityDeficit)
 	}
 }
+
+// ---- reservations gauge (design doc 10.2) ----
+
+type fakeReservationCounter struct {
+	counts map[string]int32 // quotaKey -> live reservation count
+}
+
+func (f fakeReservationCounter) ReservationCounts() map[string]int32 { return f.counts }
+
+func TestExportSeries_ReservationsGauge(t *testing.T) {
+	// One live reservation on ns1/svc-a: the gauge must carry 1 for that
+	// (namespace, service, domain) and 0 for a service with no reservations
+	// (exported zero so a drain to zero is observable, mirroring the other
+	// gauges). A quotaKey without the "=" delimiter is skipped defensively.
+	rc := fakeReservationCounter{counts: map[string]int32{
+		"ns1/service-spread-scheduler/app.kubernetes.io/name=svc-a": 1,
+	}}
+	series := []DomainSeries{
+		{Namespace: "ns1", Service: "svc-a", Domain: "default"},
+		{Namespace: "ns1", Service: "svc-b", Domain: "default"},
+	}
+	ExportReservations(rc, series)
+	if v := testutil.ToFloat64(reservationsGauge.WithLabelValues("ns1", "svc-a", "default")); v != 1 {
+		t.Fatalf("reservations gauge: want 1, got %v", v)
+	}
+	if v := testutil.ToFloat64(reservationsGauge.WithLabelValues("ns1", "svc-b", "default")); v != 0 {
+		t.Fatalf("reservations gauge zero-export: want 0, got %v", v)
+	}
+	// Malformed quotaKeys must not panic nor pollute the gauge.
+	ExportReservations(fakeReservationCounter{counts: map[string]int32{"garbage": 2}}, nil)
+	if v := testutil.ToFloat64(reservationsGauge.WithLabelValues("ns1", "svc-a", "default")); v != 1 {
+		t.Fatalf("reservations gauge polluted by malformed key: want 1, got %v", v)
+	}
+}

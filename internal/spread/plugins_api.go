@@ -141,6 +141,7 @@ func depsFromHandle(ctx context.Context, args configv1alpha1.ServiceSpreadArgs, 
 		Nodes:                nodes,
 		Policies:             policies,
 		ManagedSchedulerName: args.ManagedSchedulerName,
+		Reservations:         st,
 	})
 
 	// Reservation TTL janitor + snapshot reconciler (M4): both read the
