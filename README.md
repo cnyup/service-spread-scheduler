@@ -38,6 +38,51 @@ helm install ssp charts/service-spread-scheduler
 
 注意：`values-acr.yaml` 里的 `namespace: service-spread-system` 是 Helm create 的，pullSecret 需在 install 前存在于其中——先手动 `kubectl create ns service-spread-system` 再建 secret 再 install（Helm 对已存在 ns 无冲突）。CRD 走 chart 的 `crds/` 目录（install 时自动装、**upgrade 不更新**——schema 变更时手动 `kubectl apply --server-side -f charts/service-spread-scheduler/crds/`）。证书默认自签（零依赖），`webhook.certSource: certManager` 可切换。改参数示例：`helm upgrade ssp charts/... --set scheduler.args.exportNodePods=true`（kubeconfig 变更自动滚动 Pod）。
 
+#### Helm values 配置项完整参考
+
+完整默认值见 charts/service-spread-scheduler/values.yaml，大陆场景示例见 values-acr.yaml。常用项：
+
+**global（全局）**
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `global.namespace` | `service-spread-system` | 全部组件的命名空间 |
+| `global.schedulerName` | `service-spread-scheduler` | 接管的调度器名；改它意味着存量策略需迁移 |
+| `global.serviceLabelKey` | `app.kubernetes.io/name` | 服务标签键；chart 同值注入插件 Args 与 webhook 共享 ConfigMap（双处同步由 chart 保证） |
+
+**scheduler（调度器）**
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `scheduler.image.{registry,repository,tag,pullPolicy}` | ghcr / 对应仓库 / Chart.appVersion / IfNotPresent | 镜像；大陆集群改 ACR（见 values-acr） |
+| `scheduler.replicas` | `2` | 副本数；多副本共享同一 leader Lease，只有 leader 决策 |
+| `scheduler.resources` | 100m/128Mi ~ 500m/384Mi | 资源请求/限制 |
+| `scheduler.imagePullSecrets` | `[]` | 拉取凭证，如 `[{name: acr-regcred}]`（ACR 必配） |
+| `scheduler.args.requirePolicy` | `true` | 无策略命中的 Pod 拒绝调度（fail-closed） |
+| `scheduler.args.fallbackCacheTTL` | `10m` | 副本目标 lastGood 缓存上限 |
+| `scheduler.args.reservationTTL` | `5m` | Reserve 预占兜底过期（janitor 验证后释放） |
+| `scheduler.args.reconcilePeriod` | `10m` | 计数快照重建周期 |
+| `scheduler.args.exportNodePods` | `false` | 调试指标 `service_spread_node_pods`（高基数，慎开） |
+| `scheduler.args.exportTargetDetail` | `false` | 调试指标 `service_spread_replica_target_detail` |
+
+**webhook（策略准入）**
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `webhook.image.*` / `webhook.replicas` / `webhook.resources` / `webhook.imagePullSecrets` | 同上模式 | 与 scheduler 一致 |
+| `webhook.certSource` | `selfSign` | 证书来源：`selfSign`（进程内自签，零依赖）/ `certManager`（需 cert-manager，chart 渲染 Issuer+Certificate）。**二选一不可同开** |
+
+**可选组件开关**
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `vap.enabled` | `false` | VAP（阻止受管 Pod 预设 nodeName）；1.28 需 apiserver 双 feature gate，改不了 flags 的集群保持关闭 |
+| `prometheusRule.enabled` | `false` | 4 条告警规则 |
+| `prometheusRule.labels` | `{} ` | **必须匹配你 Prometheus 的 ruleSelector**（如 ACK 实测为 `prometheus: k8s`） |
+| `prometheusRule.namespace` | `""`（= release ns） | ruleNamespaceSelector 为 nil 的 operator 只收自己 ns——放 `monitoring` |
+
+**修改生效语义**：镜像/资源/副本 → `helm upgrade` 直接滚动；`scheduler.args.*` → checksum 注解自动滚动 Pod；`global.schedulerName`/`serviceLabelKey` → 涉及策略与工作负载匹配，变更需迁移评估。
+
 <details><summary>裸清单安装（无 Helm）</summary>
 
 ### 前置要求
