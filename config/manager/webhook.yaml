@@ -72,6 +72,15 @@ spec:
         - name: serving-cert
           secret:
             secretName: service-spread-webhook-serving-cert
+            # optional: on a cold cluster the Secret is created by the
+            # in-process self-sign rotator AFTER the pod starts (the
+            # chicken-and-egg of self-issued certs); with optional=false
+            # the container never starts and the rotator never runs
+            # (verified on kind 2026-09-29). kubelet keeps retrying the
+            # mount and picks the Secret up once issued; the process
+            # exits before that (see main.go) and the restart lands on a
+            # fully-mounted volume.
+            optional: true
 ---
 # PDB: keep one webhook serving during node drains — policy admission is
 # fail-closed, losing ALL webhook pods blocks ServiceSpreadPolicy writes

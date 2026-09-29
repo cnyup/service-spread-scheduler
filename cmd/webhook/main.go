@@ -91,6 +91,29 @@ func main() {
 		var err error
 		certWatcher, err = certwatcher.New(certPath, keyPath)
 		if err != nil {
+			if selfSignCerts {
+				// Cold start with an optional cert volume: issue the
+				// serving Secret RIGHT NOW (synchronously, before TLS
+				// setup) so kubelet can mount it; then exit non-zero —
+				// the Deployment restarts us onto the mounted volume.
+				// This must happen here, before the manager (and its
+				// leader-elected rotator) exists: the pod cannot serve
+				// TLS without the pair, so the leader loop can never
+				// bootstrap it (chicken-and-egg, verified on kind
+				// 2026-09-29: FailedMount with the rotator idle).
+				if rot, rerr := sspwebhook.NewCertRotator(restCfg,
+					"service-spread-policy-validator",
+					sspwebhook.ServingCertDNSNames(configMapNamespace),
+				); rerr == nil {
+					if _, err := rot.EnsureBootstrap(context.Background()); err != nil {
+						setupLog.Error(err, "selfcert: cold-start bootstrap failed")
+					} else {
+						setupLog.Info("selfcert: cold-start certificate issued; waiting for volume mount")
+					}
+				}
+				setupLog.Error(err, "certificate not mounted yet (self-sign cold start); restarting", "cert", certPath)
+				os.Exit(1)
+			}
 			setupLog.Error(err, "failed to initialize certificate watcher", "cert", certPath, "key", keyPath)
 			os.Exit(1)
 		}
@@ -148,6 +171,15 @@ func main() {
 		if err != nil {
 			setupLog.Error(err, "unable to create certificate rotator")
 			os.Exit(1)
+		}
+		// Bootstrap BEFORE the manager starts: a fresh install has no
+		// serving-cert Secret, and the pod's volume mount blocks container
+		// start until it exists — the TLS server and the leader-elected
+		// loop would deadlock (verified on kind 2026-09-29). Every replica
+		// attempts this once; concurrent writers converge because the leaf
+		// check is idempotent and the winner's Secret satisfies the rest.
+		if _, err := rotator.EnsureBootstrap(context.Background()); err != nil {
+			setupLog.Error(err, "selfcert: bootstrap ensure failed (continuing; the leader loop retries)")
 		}
 		if err := mgr.Add(leaderOnly(rotator)); err != nil {
 			setupLog.Error(err, "unable to add certificate rotator to manager")

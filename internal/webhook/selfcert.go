@@ -276,9 +276,22 @@ func NewCertRotator(cfg *rest.Config, webhookCfgName string, dnsNames []string) 
 // Ensure runs one reconcile pass: read the Secret, (re)issue when the leaf
 // is missing/expiring/NOT SIGNED BY the stored CA (e.g. a Secret written
 // by the e2e bootstrap or cert-manager before switching to self-sign),
-// then patch the caBundle when a new CA was issued.
+// then patch the caBundle when a new CA was issued. Rolls the webhook
+// Deployment on issuance so replicas reload the pair.
 // Returns whether a new certificate was issued this pass.
 func (r *CertRotator) Ensure(ctx context.Context) (bool, error) {
+	return r.ensure(ctx, true)
+}
+
+// EnsureBootstrap is the pre-manager variant: it must NOT roll the
+// Deployment — during cold start the caller's own pod is waiting on the
+// Secret volume, and rolling mid-startup re-triggers the same wait. The
+// leader loop performs any needed roll once elected.
+func (r *CertRotator) EnsureBootstrap(ctx context.Context) (bool, error) {
+	return r.ensure(ctx, false)
+}
+
+func (r *CertRotator) ensure(ctx context.Context, roll bool) (bool, error) {
 	sec, err := r.client.CoreV1().Secrets(r.secretNamespace).Get(ctx, ServingCertSecretName, metav1.GetOptions{})
 	needIssue := err != nil ||
 		len(sec.Data[tlsCertKey]) == 0 ||
@@ -322,12 +335,14 @@ func (r *CertRotator) Ensure(ctx context.Context) (bool, error) {
 		ctx, r.webhookCfgName, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
 		return true, fmt.Errorf("patch caBundle on %s: %w", r.webhookCfgName, err)
 	}
-	// The certwatcher may miss the kubelet's atomic symlink swap on Secret
-	// revision (verified on kind 2026-09-29: files in sync, no reload until
-	// restart). Rolling the webhook Deployment on each issuance closes the
-	// gap — same approach as KEDA's cert-rotator.
-	if err := r.rollWebhookDeployment(ctx); err != nil {
-		return true, fmt.Errorf("roll webhook pods after issuance: %w", err)
+	if roll {
+		// The certwatcher may miss the kubelet's atomic symlink swap on
+		// Secret revision (verified on kind 2026-09-29: files in sync, no
+		// reload until restart). Rolling the webhook Deployment on each
+		// issuance closes the gap — same approach as KEDA's cert-rotator.
+		if err := r.rollWebhookDeployment(ctx); err != nil {
+			return true, fmt.Errorf("roll webhook pods after issuance: %w", err)
+		}
 	}
 	return true, nil
 }
