@@ -1,8 +1,8 @@
-# Default values — MAINLAND (ACR) path: your users deploy on ACK where ghcr.io
-# is unreachable (verified 2026-09-28), so the ACR mirror is the default.
-# Overseas clusters override:
-#   --set scheduler.image.registry=ghcr.io/cnyup/service-spread-scheduler \
-#   --set webhook.image.registry=ghcr.io/cnyup/service-spread-scheduler
+# Default values — Docker Hub (PUBLIC, anonymous pull: zero-config install).
+# Mainland clusters where docker.io is slow/unstable override to ACR:
+#   --set global.imageRegistry=registry.cn-hangzhou.aliyuncs.com/cnyup \
+#   --set scheduler.image.repository=registry.cn-hangzhou.aliyuncs.com/cnyup/scheduler \
+#   ... (see README "mainland ACR route"); ACR needs a pullSecret.
 global:
   namespace: service-spread-system
 
@@ -17,8 +17,8 @@ global:
 
 scheduler:
   image:
-    registry: registry.cn-hangzhou.aliyuncs.com/cnyup
-    repository: scheduler
+    registry: docker.io
+    repository: bcyup/service-spread-scheduler
     tag: ""            # defaults to Chart.appVersion
     pullPolicy: IfNotPresent
   replicas: 2
@@ -33,23 +33,20 @@ scheduler:
     reconcilePeriod: 10m
     exportNodePods: false       # debug gauge, high cardinality
     exportTargetDetail: false   # debug gauge
-  # ACR personal edition is never anonymous: system components need the
-  # credential too (they use dedicated ServiceAccounts, NOT default).
-  imagePullSecrets:
-    - name: acr-regcred
+  # Public Docker Hub needs none; set [{name: acr-regcred}] when using ACR.
+  imagePullSecrets: []
 
 webhook:
   image:
-    registry: registry.cn-hangzhou.aliyuncs.com/cnyup
-    repository: webhook
+    registry: docker.io
+    repository: bcyup/service-spread-webhook
     tag: ""            # defaults to Chart.appVersion
     pullPolicy: IfNotPresent
   replicas: 2
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: 500m, memory: 256Mi}
-  imagePullSecrets:
-    - name: acr-regcred
+  imagePullSecrets: []
   # certSource: selfSign (in-process, zero dependencies — default) or
   # certManager (requires cert-manager CRDs AND removes the self-sign flags
   # below; do NOT run both, they would fight over the serving Secret).
