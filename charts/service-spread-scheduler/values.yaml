@@ -33,7 +33,10 @@ scheduler:
     reconcilePeriod: 10m
     exportNodePods: false       # debug gauge, high cardinality
     exportTargetDetail: false   # debug gauge
-  imagePullSecrets: []          # e.g. [{name: acr-regcred}]
+  # ACR personal edition is never anonymous: system components need the
+  # credential too (they use dedicated ServiceAccounts, NOT default).
+  imagePullSecrets:
+    - name: acr-regcred
 
 webhook:
   image:
@@ -45,7 +48,8 @@ webhook:
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: 500m, memory: 256Mi}
-  imagePullSecrets: []
+  imagePullSecrets:
+    - name: acr-regcred
   # certSource: selfSign (in-process, zero dependencies — default) or
   # certManager (requires cert-manager CRDs AND removes the self-sign flags
   # below; do NOT run both, they would fight over the serving Secret).
