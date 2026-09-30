@@ -87,6 +87,33 @@ jobs:
           git add -A && git commit -qm "chart ${CHART_VERSION} for ${GITHUB_REF_NAME}" || echo "no chart change"
           git push -q origin HEAD:gh-pages
 
+  # Docker Hub mirror (public, anonymous pull): the zero-config install
+  # path. Gated on DOCKERHUB_TOKEN existing; skipped otherwise.
+  push-dockerhub:
+    runs-on: ubuntu-latest
+    needs: release
+    if: vars.ENABLE_DOCKERHUB == 'true' && secrets.DOCKERHUB_TOKEN != ''
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USER || 'bcyup' }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Mirror images
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          for img in scheduler webhook; do
+            src="ghcr.io/cnyup/service-spread-scheduler/${img}:${TAG}"
+            dst="bcyup/service-spread-scheduler-${img}:${TAG}"
+            docker pull --platform linux/amd64 "$src"
+            docker tag "$src" "$dst"
+            docker push "$dst"
+            echo "mirrored ${img} -> ${dst}"
+          done
+
   # Mainland mirror: pulls the just-pushed ghcr images by digest and re-pushes
   # them to Aliyun ACR. Always scheduled after the ghcr job; the config-check
   # step prints which prerequisite is missing (SET/UNSET, never values) so a

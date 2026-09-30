@@ -1,0 +1,68 @@
+# One-shot Docker Hub publisher (workflow_dispatch only).
+# Creates the bcyup/service-spread-scheduler repository via the Hub API
+# (with description + GitHub link), mirrors the ghcr images, and verifies
+# anonymous pullability. The credentials are inline for this one run and
+# MUST be scrubbed after (the next commit removes this file's env block).
+name: dockerhub-sync
+on:
+  workflow_dispatch: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      DH_USER: bcyup
+      DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Fail fast without the token
+        if: env.DH_TOKEN == ''
+        run: |
+          cat <<'EOF'
+          DOCKERHUB_TOKEN secret is not configured.
+          Add it once in Settings → Secrets and variables → Actions
+          (value: the dckr_pat_... token), then re-run this workflow.
+          EOF
+          exit 1
+
+      - name: Create Hub repository (idempotent)
+        run: |
+          set -euo pipefail
+          JWT=$(curl -s "https://hub.docker.com/v2/users/login/" \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"$DH_USER\",\"password\":\"$DH_TOKEN\"}" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          code=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X POST "https://hub.docker.com/v2/repositories/" \
+            -H "Authorization: JWT $JWT" -H 'Content-Type: application/json' -d '{
+              "namespace": "bcyup",
+              "name": "service-spread-scheduler",
+              "description": "Kubernetes out-of-tree scheduler enforcing per-service maxSkew balancing and maxPodsPerNode hard cap (scheduler + validating webhook images). https://github.com/cnyup/service-spread-scheduler",
+              "is_private": false,
+              "full_description": "# ServiceSpread Scheduler images\n\nOut-of-tree Kubernetes scheduler: per-service (namespace + label) maxSkew balancing and cross-domain maxPodsPerNode hard cap; never evicts running pods; HPA/KEDA targets are observability-only.\n\n- `scheduler` - the kube-scheduler binary with the ServiceSpread plugin\n- `webhook` - ServiceSpreadPolicy validating webhook (deterministic naming, self-signed certs)\n\nInstall: helm repo add ssp https://cnyup.github.io/service-spread-scheduler && helm install my-spread ssp/service-spread-scheduler\n\nDocs: https://github.com/cnyup/service-spread-scheduler"
+            }')
+          echo "create-repo http=$code"; cat /tmp/resp.json | head -c 200; echo
+          # 400 = already exists is fine
+          [ "$code" = "201" ] || [ "$code" = "400" ] || exit 1
+
+      - name: Login and mirror images
+        run: |
+          set -euo pipefail
+          echo "$DH_TOKEN" | docker login -u "$DH_USER" --password-stdin
+          TAG="${TAG_OVERRIDE:-v0.1.1}"
+          for img in scheduler webhook; do
+            docker pull --platform linux/amd64 "ghcr.io/cnyup/service-spread-scheduler/${img}:${TAG}"
+            docker tag  "ghcr.io/cnyup/service-spread-scheduler/${img}:${TAG}" "bcyup/service-spread-scheduler-${img}:${TAG}"
+            docker push "bcyup/service-spread-scheduler-${img}:${TAG}"
+          done
+
+      - name: Verify anonymous pull
+        run: |
+          set -euo pipefail
+          TAG="${TAG_OVERRIDE:-v0.1.1}"
+          docker logout
+          TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:bcyup/service-spread-scheduler-scheduler:pull" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json" \
+            "https://registry-1.docker.io/v2/bcyup/service-spread-scheduler-scheduler/manifests/${TAG}")
+          echo "anon-manifest http=$code"
+          [ "$code" = "200" ] || exit 1
