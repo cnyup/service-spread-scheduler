@@ -1,5 +1,8 @@
-# Default values — ghcr.io path (reachable outside mainland China).
-# Mainland ACK clusters: see values-acr.yaml.
+# Default values — MAINLAND (ACR) path: your users deploy on ACK where ghcr.io
+# is unreachable (verified 2026-09-28), so the ACR mirror is the default.
+# Overseas clusters override:
+#   --set scheduler.image.registry=ghcr.io/cnyup/service-spread-scheduler \
+#   --set webhook.image.registry=ghcr.io/cnyup/service-spread-scheduler
 global:
   namespace: service-spread-system
 
@@ -14,7 +17,7 @@ global:
 
 scheduler:
   image:
-    registry: ghcr.io/cnyup/service-spread-scheduler
+    registry: registry.cn-hangzhou.aliyuncs.com/cnyup
     repository: scheduler
     tag: ""            # defaults to Chart.appVersion
     pullPolicy: IfNotPresent
@@ -34,7 +37,7 @@ scheduler:
 
 webhook:
   image:
-    registry: ghcr.io/cnyup/service-spread-scheduler
+    registry: registry.cn-hangzhou.aliyuncs.com/cnyup
     repository: webhook
     tag: ""            # defaults to Chart.appVersion
     pullPolicy: IfNotPresent

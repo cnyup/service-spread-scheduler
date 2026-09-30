@@ -25,9 +25,13 @@ Kubernetes out-of-tree 自定义调度器：按「namespace + 服务标签 + 调
 ### 安装（推荐：Helm）
 
 ```bash
-# 大陆 ACK 集群（镜像走 ACR）：预建 ns → install → secret → 滚动
+# 一行安装（chart 仓库已发布；默认即 ACR 镜像 v0.1.1）
+helm repo add ssp https://cnyup.github.io/service-spread-scheduler && helm repo update
+helm install my-spread ssp/service-spread-scheduler
+
+# 等价本地路径（无 Pages 时）：预建 ns → install
 kubectl create ns service-spread-system
-helm install ssp charts/service-spread-scheduler -f charts/service-spread-scheduler/values-acr.yaml
+helm install ssp charts/service-spread-scheduler
 kubectl -n service-spread-system create secret docker-registry acr-regcred \
   --docker-server=registry.cn-hangzhou.aliyuncs.com \
   --docker-username=<你的ACR用户名> --docker-password=<固定密码>

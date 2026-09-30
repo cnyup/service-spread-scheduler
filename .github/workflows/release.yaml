@@ -71,6 +71,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Publish Helm chart to gh-pages
+        run: |
+          set -euo pipefail
+          curl -sSL https://get.helm.sh/helm-v3.15.4-linux-amd64.tar.gz | tar xz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
+          CHART_VERSION=$(awk '/^version:/{print $2}' charts/service-spread-scheduler/Chart.yaml)
+          git config user.name "ci" && git config user.email "ci@users.noreply.github.com"
+          git fetch origin gh-pages || true
+          mkdir -p /tmp/repo && cd /tmp/repo
+          git clone -q --branch gh-pages ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git . 2>/dev/null || git init -q && git remote add origin ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git || true
+          cp -r ${GITHUB_WORKSPACE}/charts/service-spread-scheduler /tmp/src-chart
+          helm package /tmp/src-chart -d .
+          helm repo index . --url https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY##*/}
+          git add -A && git commit -qm "chart ${CHART_VERSION} for ${GITHUB_REF_NAME}" || echo "no chart change"
+          git push -q origin HEAD:gh-pages
+
   # Mainland mirror: pulls the just-pushed ghcr images by digest and re-pushes
   # them to Aliyun ACR. Always scheduled after the ghcr job; the config-check
   # step prints which prerequisite is missing (SET/UNSET, never values) so a
