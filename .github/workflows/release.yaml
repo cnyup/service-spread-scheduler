@@ -105,14 +105,12 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          for img in scheduler webhook; do
-            src="ghcr.io/cnyup/service-spread-scheduler/${img}:${TAG}"
-            dst="bcyup/service-spread-scheduler-${img}:${TAG}"
-            docker pull --platform linux/amd64 "$src"
-            docker tag "$src" "$dst"
-            docker push "$dst"
-            echo "mirrored ${img} -> ${dst}"
-          done
+          docker pull --platform linux/amd64 "ghcr.io/cnyup/service-spread-scheduler/scheduler:${TAG}"
+          docker tag  "ghcr.io/cnyup/service-spread-scheduler/scheduler:${TAG}" "bcyup/service-spread-scheduler:${TAG}"
+          docker push "bcyup/service-spread-scheduler:${TAG}"
+          docker pull --platform linux/amd64 "ghcr.io/cnyup/service-spread-scheduler/webhook:${TAG}"
+          docker tag  "ghcr.io/cnyup/service-spread-scheduler/webhook:${TAG}" "bcyup/service-spread-webhook:${TAG}"
+          docker push "bcyup/service-spread-webhook:${TAG}"
 
   # Mainland mirror: pulls the just-pushed ghcr images by digest and re-pushes
   # them to Aliyun ACR. Always scheduled after the ghcr job; the config-check

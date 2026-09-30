@@ -29,22 +29,30 @@ jobs:
           set -euo pipefail
           echo "$DH_TOKEN" | docker login -u "$DH_USER" --password-stdin
           TAG="${TAG_OVERRIDE:-v0.1.1}"
-          for img in scheduler webhook; do
-            docker pull --platform linux/amd64 "ghcr.io/cnyup/service-spread-scheduler/${img}:${TAG}"
-            docker tag  "ghcr.io/cnyup/service-spread-scheduler/${img}:${TAG}" "bcyup/service-spread-scheduler-${img}:${TAG}"
-            docker push "bcyup/service-spread-scheduler-${img}:${TAG}"
-          done
+          # Two clean repository names (push auto-creates both public):
+          #   bcyup/service-spread-scheduler  <- scheduler image
+          #   bcyup/service-spread-webhook    <- webhook image
+          docker pull --platform linux/amd64 "ghcr.io/cnyup/service-spread-scheduler/scheduler:${TAG}"
+          docker tag  "ghcr.io/cnyup/service-spread-scheduler/scheduler:${TAG}" "bcyup/service-spread-scheduler:${TAG}"
+          docker push "bcyup/service-spread-scheduler:${TAG}"
+          docker pull --platform linux/amd64 "ghcr.io/cnyup/service-spread-scheduler/webhook:${TAG}"
+          docker tag  "ghcr.io/cnyup/service-spread-scheduler/webhook:${TAG}" "bcyup/service-spread-webhook:${TAG}"
+          docker push "bcyup/service-spread-webhook:${TAG}"
 
       - name: Login and mirror images
         run: |
           set -euo pipefail
           echo "$DH_TOKEN" | docker login -u "$DH_USER" --password-stdin
           TAG="${TAG_OVERRIDE:-v0.1.1}"
-          for img in scheduler webhook; do
-            docker pull --platform linux/amd64 "ghcr.io/cnyup/service-spread-scheduler/${img}:${TAG}"
-            docker tag  "ghcr.io/cnyup/service-spread-scheduler/${img}:${TAG}" "bcyup/service-spread-scheduler-${img}:${TAG}"
-            docker push "bcyup/service-spread-scheduler-${img}:${TAG}"
-          done
+          # Two clean repository names (push auto-creates both public):
+          #   bcyup/service-spread-scheduler  <- scheduler image
+          #   bcyup/service-spread-webhook    <- webhook image
+          docker pull --platform linux/amd64 "ghcr.io/cnyup/service-spread-scheduler/scheduler:${TAG}"
+          docker tag  "ghcr.io/cnyup/service-spread-scheduler/scheduler:${TAG}" "bcyup/service-spread-scheduler:${TAG}"
+          docker push "bcyup/service-spread-scheduler:${TAG}"
+          docker pull --platform linux/amd64 "ghcr.io/cnyup/service-spread-scheduler/webhook:${TAG}"
+          docker tag  "ghcr.io/cnyup/service-spread-scheduler/webhook:${TAG}" "bcyup/service-spread-webhook:${TAG}"
+          docker push "bcyup/service-spread-webhook:${TAG}"
 
       - name: Verify anonymous pull
         run: |
