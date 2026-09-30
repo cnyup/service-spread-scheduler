@@ -21,8 +21,10 @@ baked in. Read RUNBOOK §2 for the full install-order rationale.
       certificate/service-spread-webhook-serving-cert --timeout=120s`
       (Manual path: self-signed secret + kubectl patch caBundle — RUNBOOK §2.5)
 - [ ] 6. `kubectl apply -f config/webhook/service.yaml`
-- [ ] 7. Deployments with the PINNED image tag (never :latest in production):
-      mainland clusters use the ACR mirror —
+- [ ] 7. Deployments with the PINNED image tag (never :latest in production).
+      Default: public Docker Hub (bcyup/*, no secret needed; mainland
+      nodes need a registry mirror — see README mainland-proxy section).
+      Fallback: ACR mirror (pipeline retired, v0.1.x tags remain) —
       `sed 's|ghcr.io/cnyup/service-spread-scheduler/|registry.cn-hangzhou.aliyuncs.com/cnyup/|; s/:latest/:vX.Y.Z/'`
       on both config/manager/*.yaml before applying
 - [ ] 8. **imagePullSecret is REQUIRED for ACR personal edition** (public ≠

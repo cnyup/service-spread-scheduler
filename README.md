@@ -25,24 +25,37 @@ Kubernetes out-of-tree 自定义调度器：按「namespace + 服务标签 + 调
 ### 安装（推荐：Helm）
 
 ```bash
-# 一行安装（chart 仓库已发布；默认即 ACR 镜像 v0.1.1）
+# 标准安装：两行（镜像来自 Docker Hub 公开仓库 bcyup/*，无需任何 secret）
 helm repo add ssp https://cnyup.github.io/service-spread-scheduler && helm repo update
-helm install my-spread ssp/service-spread-scheduler
+kubectl create ns service-spread-system && helm install my-spread ssp/service-spread-scheduler -n service-spread-system --set global.namespace=service-spread-system
+```
 
-# 等价本地路径（无 Pages 时）：预建 ns → install
+**大陆集群（kubelet 直连 docker.io 超时）**：给节点容器运行时配 registry mirror（代理拉取），之后同样是上面两行。Docker daemon 示例（每节点 `/etc/docker/daemon.json`；containerd 用 hosts.toml 等价配置）：
+
+```json
+{ "registry-mirrors": ["https://docker.1ms.run", "https://docker.xuanyuan.me"] }
+```
+
+改完 `systemctl restart docker`。镜像引用不用动——mirror 对 `docker.io/*` 透明代理。
+
+<details><summary>备选：ACR 回退路线（无代理时；发版管线已停推 ACR，存量 v0.1.x 可拉）</summary>
+
+```bash
 kubectl create ns service-spread-system
-helm install ssp charts/service-spread-scheduler
+helm install my-spread ssp/service-spread-scheduler -n service-spread-system \
+  --set global.namespace=service-spread-system \
+  --set scheduler.image.registry=registry.cn-hangzhou.aliyuncs.com/cnyup \
+  --set scheduler.image.repository=scheduler \
+  --set webhook.image.registry=registry.cn-hangzhou.aliyuncs.com/cnyup \
+  --set webhook.image.repository=webhook \
+  --set scheduler.imagePullSecrets[0].name=acr-regcred \
+  --set webhook.imagePullSecrets[0].name=acr-regcred
 kubectl -n service-spread-system create secret docker-registry acr-regcred \
   --docker-server=registry.cn-hangzhou.aliyuncs.com \
-  --docker-username=<你的ACR用户名> --docker-password=<固定密码>
-# ACR 私有仓库所有拉取都要认证：滚动系统组件 + 给 ns 默认 SA 挂凭证
-kubectl -n service-spread-system rollout restart deploy/service-spread-scheduler deploy/service-spread-webhook
-kubectl -n service-spread-system patch serviceaccount default \
-  -p '{"imagePullSecrets":[{"name":"acr-regcred"}]}'
+  --docker-username=<ACR用户名> --docker-password=<固定密码>
+```
 
-# 海外集群（默认 values，ghcr 镜像，无需 secret）
-kubectl create ns service-spread-system
-helm install ssp charts/service-spread-scheduler
+</details>
 ```
 
 说明：

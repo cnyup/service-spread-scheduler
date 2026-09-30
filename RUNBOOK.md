@@ -136,7 +136,15 @@ images and a floating `:latest` to ghcr.io. Never deploy `:latest` with
 already use `IfNotPresent`, keep it that way when pinning by tag; switch
 to `IfNotPresent`+digest (`@sha256:...`) for immutable pinning.
 
-### Mainland clusters (ACR mirror)
+### Mainland clusters — primary: node registry mirror (docker.io proxy)
+
+The distribution default is the PUBLIC Docker Hub images (bcyup/*),
+pullable anonymously. Where kubelets cannot reach docker.io (ACK
+field-verified 2026-09-30: DeadlineExceeded), configure a registry
+mirror on the nodes (daemon.json registry-mirrors for docker;
+hosts.toml for containerd) — image references stay unchanged.
+
+### Mainland clusters — fallback: ACR mirror (distribution pipeline retired; existing v0.1.x tags remain pullable)
 
 ghcr.io is unreachable from many mainland clusters — verified 2026-09-28
 on an ACK Beijing cluster: pulls hang indefinitely (no error event, no
