@@ -75,7 +75,10 @@ jobs:
           # default + ACR + toggled renders must all succeed
           helm template ssp charts/service-spread-scheduler > /dev/null
           helm template ssp charts/service-spread-scheduler \
-            -f charts/service-spread-scheduler/values-acr.yaml > /dev/null
+            --set scheduler.image.registry=registry.cn-hangzhou.aliyuncs.com/cnyup \
+            --set scheduler.image.repository=scheduler \
+            --set webhook.image.registry=registry.cn-hangzhou.aliyuncs.com/cnyup \
+            --set webhook.image.repository=webhook > /dev/null
           helm template ssp charts/service-spread-scheduler \
             --set vap.enabled=true --set prometheusRule.enabled=true > /dev/null
 
