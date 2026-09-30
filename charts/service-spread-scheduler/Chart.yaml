@@ -6,7 +6,7 @@ description: |
   label), with a validating policy webhook (deterministic naming,
   self-signed certificates) and a replica-target observer.
 type: application
-version: 0.1.4
+version: 0.1.5
 appVersion: "v0.1.1"
 home: https://github.com/cnyup/service-spread-scheduler
 sources:
