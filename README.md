@@ -70,7 +70,7 @@ kubectl -n service-spread-system create secret docker-registry acr-regcred \
 
 #### Helm values 配置项完整参考
 
-完整默认值见 charts/service-spread-scheduler/values.yaml，大陆场景示例见 values-acr.yaml。常用项：
+完整默认值见 charts/service-spread-scheduler/values.yaml（头注释含 ACR 回退的完整 --set 命令）。常用项：
 
 **global（全局）**
 
@@ -84,7 +84,7 @@ kubectl -n service-spread-system create secret docker-registry acr-regcred \
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `scheduler.image.{registry,repository,tag,pullPolicy}` | ghcr / 对应仓库 / Chart.appVersion / IfNotPresent | 镜像；大陆集群改 ACR（见 values-acr） |
+| `scheduler.image.{registry,repository,tag,pullPolicy}` | docker.io / bcyup/service-spread-scheduler(-webhook) / Chart.appVersion / IfNotPresent | 镜像；大陆回退 ACR 见 values 头注释 |
 | `scheduler.replicas` | `2` | 副本数；多副本共享同一 leader Lease，只有 leader 决策 |
 | `scheduler.resources` | 100m/128Mi ~ 500m/384Mi | 资源请求/限制 |
 | `scheduler.imagePullSecrets` | `[]` | 拉取凭证，如 `[{name: acr-regcred}]`（ACR 必配） |
@@ -207,8 +207,8 @@ spec:
 
 ### 镜像分发
 
-- 海外/可达 ghcr.io 的集群：`ghcr.io/cnyup/service-spread-scheduler/{scheduler,webhook}:vX.Y.Z`
-- **大陆集群（ACK 实测）**：ghcr 直拉会无限挂起；release workflow 自动双推阿里云 ACR 个人版 `registry.cn-hangzhou.aliyuncs.com/cnyup/{scheduler,webhook}`。**个人版「公有」仓库≠匿名可拉，必须配 imagePullSecret**——完整大陆部署路径见 [RUNBOOK §3](RUNBOOK.md)
+- **标准（全球）**：Docker Hub 公开仓库 `bcyup/service-spread-scheduler` + `bcyup/service-spread-webhook`，匿名可拉，chart 默认即此——零 secret。
+- **大陆集群（kubelet 直连 docker.io 超时，ACK 实测）**：节点配 registry mirror 代理拉取（见上文安装节的 daemon.json 示例），或 ACR 回退（`registry.cn-hangzhou.aliyuncs.com/cnyup/{scheduler,webhook}`，需 imagePullSecret；发版管线已停推，存量 v0.1.x 可拉）。ghcr.io 直拉在大陆无限挂起不可用。
 
 ### 监控
 
@@ -229,7 +229,7 @@ spec:
 | M3 | 调度插件全扩展点、EnqueueExtensions、集群事件 hints | ✅（kind e2e 矩阵 + 混沌 4/4） |
 | M4 | 副本目标观测器、容量告警、TTL janitor / reconciler 装配、生产清单 | ✅（告警三层验证 + ACK 真集群三项验证） |
 
-验收状态：设计文档验收标准 11/11 有证据（kind e2e + 混沌 + 单测），偏差表 14/14 落地。发版管线（ghcr 多架构 + ACR 大陆镜像）已在真实 tag 上全绿验证。
+验收状态：设计文档验收标准 11/11 有证据（kind e2e + 混沌 + 单测），偏差表 14/14 落地。发版管线（ghcr 构建源 + Docker Hub 公开发布 + gh-pages chart）已在真实 tag 上全绿验证。
 
 ### 验证资产
 
