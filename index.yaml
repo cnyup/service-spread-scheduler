@@ -2,8 +2,24 @@ apiVersion: v1
 entries:
   service-spread-scheduler:
   - apiVersion: v2
+    appVersion: v0.2.1
+    created: "2026-10-08T07:30:33.634075918Z"
+    description: 'Out-of-tree Kubernetes scheduler enforcing maxSkew balancing and
+      a cross-domain maxPodsPerNode hard cap per service (namespace + service label),
+      with a validating policy webhook (deterministic naming, self-signed certificates)
+      and a replica-target observer. '
+    digest: 91b108f7f515139d0aa1364e0c1a44ac00bd99acb4b68a5733d15bb82ed05597
+    home: https://github.com/cnyup/service-spread-scheduler
+    name: service-spread-scheduler
+    sources:
+    - https://github.com/cnyup/service-spread-scheduler
+    type: application
+    urls:
+    - https://cnyup.github.io/service-spread-scheduler/service-spread-scheduler-0.2.1.tgz
+    version: 0.2.1
+  - apiVersion: v2
     appVersion: v0.1.1
-    created: "2026-09-30T17:38:12.61551+08:00"
+    created: "2026-10-08T07:30:33.633296192Z"
     description: 'Out-of-tree Kubernetes scheduler enforcing maxSkew balancing and
       a cross-domain maxPodsPerNode hard cap per service (namespace + service label),
       with a validating policy webhook (deterministic naming, self-signed certificates)
@@ -19,7 +35,7 @@ entries:
     version: 0.1.6
   - apiVersion: v2
     appVersion: v0.1.1
-    created: "2026-09-30T17:38:12.615208+08:00"
+    created: "2026-10-08T07:30:33.632669493Z"
     description: 'Out-of-tree Kubernetes scheduler enforcing maxSkew balancing and
       a cross-domain maxPodsPerNode hard cap per service (namespace + service label),
       with a validating policy webhook (deterministic naming, self-signed certificates)
@@ -35,7 +51,7 @@ entries:
     version: 0.1.5
   - apiVersion: v2
     appVersion: v0.1.1
-    created: "2026-09-30T17:38:12.614882+08:00"
+    created: "2026-10-08T07:30:33.632259806Z"
     description: 'Out-of-tree Kubernetes scheduler enforcing maxSkew balancing and
       a cross-domain maxPodsPerNode hard cap per service (namespace + service label),
       with a validating policy webhook (deterministic naming, self-signed certificates)
@@ -51,7 +67,7 @@ entries:
     version: 0.1.4
   - apiVersion: v2
     appVersion: v0.1.1
-    created: "2026-09-30T17:38:12.614523+08:00"
+    created: "2026-10-08T07:30:33.631801657Z"
     description: 'Out-of-tree Kubernetes scheduler enforcing maxSkew balancing and
       a cross-domain maxPodsPerNode hard cap per service (namespace + service label),
       with a validating policy webhook (deterministic naming, self-signed certificates)
@@ -67,7 +83,7 @@ entries:
     version: 0.1.3
   - apiVersion: v2
     appVersion: v0.1.1
-    created: "2026-09-30T17:38:12.614101+08:00"
+    created: "2026-10-08T07:30:33.631343908Z"
     description: 'Out-of-tree Kubernetes scheduler enforcing maxSkew balancing and
       a cross-domain maxPodsPerNode hard cap per service (namespace + service label),
       with a validating policy webhook (deterministic naming, self-signed certificates)
@@ -81,4 +97,4 @@ entries:
     urls:
     - https://cnyup.github.io/service-spread-scheduler/service-spread-scheduler-0.1.2.tgz
     version: 0.1.2
-generated: "2026-09-30T17:38:12.613542+08:00"
+generated: "2026-10-08T07:30:33.630697961Z"
