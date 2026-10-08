@@ -16,12 +16,14 @@ Every step has an automated verification; do not skip to the tag.
 ## Tag & pipelines
 
 - [ ] `git tag vX.Y.Z && git push origin vX.Y.Z`
-- [ ] GitHub Actions `release` run: **success** (multi-arch ghcr push)
-- [ ] `push-acr` job: Config check prints 5×SET + `ACR_NAMESPACE slash-count: 0`
-- [ ] `push-acr` job: **success** (mirrors to `registry.cn-hangzhou.aliyuncs.com/cnyup/{scheduler,webhook}:X.Y.Z`)
-- [ ] Verify the mirror landed (any machine with the ACR credential):
-      `docker manifest inspect registry.cn-hangzhou.aliyuncs.com/cnyup/scheduler:vX.Y.Z`
+- [ ] GitHub Actions `release` run: **success** (multi-arch ghcr push + chart to gh-pages)
+- [ ] `push-dockerhub` job: token guard green, then **success**
+      (mirrors to `docker.io/bcyup/{service-spread-scheduler,service-spread-webhook}:vX.Y.Z`)
+- [ ] Verify the public mirror landed (any machine, anonymous):
+      `docker manifest inspect docker.io/bcyup/service-spread-scheduler:vX.Y.Z`
       → returns a manifest JSON
+- [ ] Verify chart: `helm show chart ssp/service-spread-scheduler --version X.Y.Z` after `helm repo update`
+      (gh-pages CDN delay of 1-2 min is normal — HANDOFF §四.3)
 
 ## Post-release spot check (kind, ~10 min)
 
