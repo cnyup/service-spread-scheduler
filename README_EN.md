@@ -4,8 +4,8 @@ Out-of-tree Kubernetes scheduler plugin that enforces service-level pod
 spreading: pods of the same service (namespace + service label +
 `schedulerName`) are spread with a hard `maxSkew` inside their stable spread
 domain and a hard `maxPodsPerNode` cap shared across the service's scheduling
-domains. Design: see `../service-spread-scheduler-design.md` (requirements)
-and `../service-spread-scheduler-dev-design.md` (implementation design).
+domains. Design: see `docs/design/service-spread-scheduler-design.md` (requirements)
+and `docs/design/service-spread-scheduler-dev-design.md` (implementation design).
 
 - Target Kubernetes: **1.28.x** (`k8s.io/kubernetes v1.28.15` + staging
   replaces in `go.mod`; no plugin ABI across minor versions).

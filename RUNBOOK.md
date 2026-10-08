@@ -2,8 +2,8 @@
 
 Operational guide for deploying, upgrading, and troubleshooting the
 ServiceSpread scheduler + policy webhook on a production cluster.
-Design context: see `service-spread-scheduler-design.md` and
-`service-spread-scheduler-dev-design.md`; this file covers the operational
+Design context: see `docs/design/service-spread-scheduler-design.md` and
+`docs/design/service-spread-scheduler-dev-design.md`; this file covers the operational
 surface only. Target: Kubernetes 1.28.x (see version notes at the bottom
 for 1.30+).
 

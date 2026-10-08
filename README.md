@@ -262,4 +262,4 @@ hack/e2e/                kind e2e 套件（bootstrap/matrix/chaos/keda/verify-ob
 docs（根目录上级）        设计文档：方案 + 开发设计（含 §9 偏差表 14 条）
 ```
 
-设计与开发文档（术语、规则边界、算法伪代码、测试矩阵）在仓库根的上级目录：`service-spread-scheduler-design.md`（方案）与 `service-spread-scheduler-dev-design.md`（开发设计）。
+设计与开发文档（术语、规则边界、算法伪代码、测试矩阵）在仓库内：`docs/design/service-spread-scheduler-design.md`（方案）与 `docs/design/service-spread-scheduler-dev-design.md`（开发设计）。
