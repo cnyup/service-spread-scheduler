@@ -10,15 +10,14 @@
 # - After a release, update deployments with the pinned tag instead of
 #  :latest (see config/manager/*.yaml notes).
 #
-# Optional ACR mirror (mainland distribution): ghcr.io is unreachable from
-# many mainland clusters (verified 2026-09-28 on an ACK Beijing cluster:
-# pulls hang indefinitely with no error event). The push-acr job below
-# re-pushes the same images to a personal Aliyun ACR instance so mainland
-# nodes pull over the VPC endpoint instead. Disabled unless ALL of:
-#   vars.ENABLE_ACR == 'true', secrets.ACR_REGISTRY, ACR_NAMESPACE,
-#   ACR_USERNAME, ACR_PASSWORD.
-# Registry form: <instance>-registry.cn-<region>.cr.aliyuncs.com (personal
-# edition). Clusters in the same region should pull from the -vpc variant.
+# Docker Hub (canonical public distribution, Plan A): the push-dockerhub
+# job below mirrors the just-pushed ghcr images to
+# docker.io/bcyup/{service-spread-scheduler,service-spread-webhook} so any
+# cluster with docker.io reachability installs zero-config. Requires
+# vars.ENABLE_DOCKERHUB=='true' + secrets.DOCKERHUB_TOKEN; a missing token
+# fails loudly at step level (the canonical pipeline must not half-release).
+# ACR pipeline retired 2026-09-30 (existing v0.1.x images remain pullable;
+# mainland nodes need a registry mirror — see README for daemon.json).
 name: release
 on:
   push:
@@ -88,12 +87,23 @@ jobs:
           git push -q origin HEAD:gh-pages
 
   # Docker Hub mirror (public, anonymous pull): the zero-config install
-  # path. Gated on DOCKERHUB_TOKEN existing; skipped otherwise.
+  # path. NOTE: job-level `if` cannot reference the `secrets` context
+  # (GitHub rejects the whole workflow file — invalid since 775efb2, fixed
+  # 2026-10-07); the token emptiness check lives in the guard step below.
   push-dockerhub:
     runs-on: ubuntu-latest
     needs: release
-    if: vars.ENABLE_DOCKERHUB == 'true' && secrets.DOCKERHUB_TOKEN != ''
+    if: vars.ENABLE_DOCKERHUB == 'true'
     steps:
+      - name: Fail loud if DOCKERHUB_TOKEN is unset
+        env:
+          HAS_TOKEN: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        run: |
+          if [ "${HAS_TOKEN}" != "true" ]; then
+            echo "::error::secrets.DOCKERHUB_TOKEN is unset — set it in Settings → Secrets and variables → Actions (this job is the canonical public distribution; refusing to release half-way)"
+            exit 1
+          fi
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -111,8 +121,3 @@ jobs:
           docker pull --platform linux/amd64 "ghcr.io/cnyup/service-spread-scheduler/webhook:${TAG}"
           docker tag  "ghcr.io/cnyup/service-spread-scheduler/webhook:${TAG}" "bcyup/service-spread-webhook:${TAG}"
           docker push "bcyup/service-spread-webhook:${TAG}"
-
-  # Mainland mirror: pulls the just-pushed ghcr images by digest and re-pushes
-  # them to Aliyun ACR. Always scheduled after the ghcr job; the config-check
-  # step prints which prerequisite is missing (SET/UNSET, never values) so a
-  # silent skip can be diagnosed from the run log directly.
