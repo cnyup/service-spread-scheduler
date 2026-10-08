@@ -1,15 +1,15 @@
 # HANDOFF — Service Spread Scheduler 项目交接文档
 
 > 给新会话/新协作者的入口。先读「零、当前状态快照」与「一、下一步」，需要背景再往下读。
-> 最后更新：2026-10-08（v0.2.1 发版成功——修复后管线首次完整自动发版，三地产物全部验证）
+> 最后更新：2026-10-08 晚（v0.2.1 发版成功；设计文档入库 docs/design/；开发链路迁移 avl-pro5000 + push 通道打通）
 
-## 零、当前状态快照（2026-10-08）
+## 零、当前状态快照（2026-10-08 晚）
 
-**一句话**：功能 100% 完成且全链路验证闭环；v0.2.1 已发版——修复后的 release 管线（ghcr 双架构 → Docker Hub 公开转推 → gh-pages chart）首次完整自动跑通，三地产物逐项验证落定。
+**一句话**：功能 100% 完成且全链路验证闭环；v0.2.1 已发版；仓库自给自足（设计文档 + 本交接文档入库 docs/design/ 与根目录），开发链路本地 ⇄ avl-pro5000 ⇄ GitHub 全通。
 
 | 维度 | 状态 |
 | --- | --- |
-| 代码 | main @ 0e35379，工作树干净，CI 绿（build/vet/test/race/helm-lint 全过，run 37742964804） |
+| 代码 | main @ 301e518，工作树干净（AGENTS.md/.rivet 有意不入库），CI 绿 |
 | 功能 | 设计文档验收标准 11/11、偏差表 14/14、观测指标 7/7 全部实现并有验证证据 |
 | 发版 | **v0.2.1 全自动发版成功**（run 37743284488：release 5m55s ✓ + push-dockerhub 30s ✓）；v0.2.0 为部分发版（仅 ghcr 镜像，见 §六）；chart 0.1.2–0.2.1 在 gh-pages |
 | 分发 | **Docker Hub `bcyup/service-spread-scheduler` + `bcyup/service-spread-webhook`（公开匿名）**，v0.2.1 镜像 digest 与 CI push 日志逐字节一致（86ed2c49…/e99f1476…）；ACR 管线已退役（存量 v0.1.x 可拉） |
@@ -26,8 +26,8 @@
 
 ```
 开发循环:
-  本地 /Users/yup/qw/scheduling ⇄ mutagen 会话 scheduling ⇄ yup-dev:/root/code/scheduling
-  （.git 只在远程；编辑本地做，git/build/test 在远程做：ssh yup-dev "cd /root/code/scheduling/service-spread-scheduler && <cmd>"）
+  本地 /Users/yup/github/service-spread-scheduler ⇄ mutagen 会话 service-spread-scheduler ⇄ avl-pro5000:/home/__su/yup/code/service-spread-scheduler
+  （.git 在 pro5000；编辑本地做，git/build/test 在远程做：ssh avl-pro5000 "cd /home/__su/yup/code/service-spread-scheduler && <cmd>"）
   → push main → GitHub CI（go build/vet/gofmt/test-race + YAML 校验 + helm lint/三渲染 smoke）
 
 发版（一个 tag 触发全部）:
@@ -55,11 +55,11 @@
 
 ## 三、环境约定（新会话必读）
 
-- **开发模式**：本地编辑 + mutagen 同步 + yup-dev 执行（AGENTS.md 有通用纪律）。mutagen 会话名 `scheduling`，忽略 .rivet/bin/.DS_Store；提交前 `mutagen sync flush scheduling`。
-- **git 仓库只在远程**（`/root/code/scheduling/service-spread-scheduler/.git`，main，origin=github.com:cnyup/service-spread-scheduler，SSH key `~/.ssh/id_ed25519_github` 认证）。
-- **yup-dev 是 4c4g 小机器**：禁止其上编译大型源码树（曾因全量编译 prometheus 触发负载风暴）；重操作单实例、超 2 分钟挂后台轮询；Go 重编译挪本地做（本机 go1.26 可用）。
-- **网络实测定性**（为什么分发长这样）：本机/yup-dev → docker.io/hub.docker.com 直连不通（yup-dev 的 daemon 有国内 mirror，pull 通 push 不通）；ACK kubelet → ghcr 无限挂起、docker.io 超时、ACR 干净；GitHub Actions runner → 全通（一切外部推送经 Actions）。
-- **kubeconfig**：ACK 测试集群 `~/.kube/config/k8s-ali-bj-xp-test.kubeconfig`（注意带 .kubeconfig 后缀；同目录还有 prod 等多套别混用）。kind e2e 集群在 yup-dev（context kind-ssp-e2e2）。
+- **开发模式**：本地编辑 + mutagen 同步 + avl-pro5000 执行（AGENTS.md 有通用纪律）。mutagen 会话名 `service-spread-scheduler`，忽略 .rivet/bin/.DS_Store；提交前 `mutagen sync flush service-spread-scheduler`。
+- **git 仓库在 avl-pro5000**（`/home/__su/yup/code/service-spread-scheduler/.git`，main，origin=git@github.com:cnyup/service-spread-scheduler，SSH key `~/.ssh/id_ed25519_github` 经 ssh.github.com:443 认证，GitHub 端为 repo deploy key `avl-pro5000-push`）。本地 clone 仅作编辑源，不做 git 写操作。
+- **yup-dev 是 4c4g 小机器**（已被 avl-pro5000 取代为执行机；历史负载风暴教训仍适用：重操作单实例、超 2 分钟挂后台轮询）。
+- **网络实测定性**（为什么分发长这样）：本机/pro5000 → docker.io/hub.docker.com 直连不稳（pull 可走国内 mirror，push 不通）；ACK kubelet → ghcr 无限挂起、docker.io 超时、ACR 干净；GitHub Actions runner → 全通（一切外部推送经 Actions）。pro5000 → GitHub HTTPS/SSH-443 均可达（2026-10-08 实测，push 通道已打通）。
+- **kubeconfig**：ACK 测试集群 `~/.kube/config/k8s-ali-bj-xp-test.kubeconfig`（注意带 .kubeconfig 后缀；同目录还有 prod 等多套别混用）。e2e 环境待定新场地（yup-dev kind 集群 ssp-e2e2 已删，2026-10-08）。
 - 凭证位置：ACR 登录态在本机 `~/.docker/config.json`（用户 bc小喻yup）；Docker Hub 用户 bcyup，PAT 在 GitHub secrets（DOCKERHUB_TOKEN）。
 
 ## 四、关键事实速查（踩过的坑，防重蹈）
