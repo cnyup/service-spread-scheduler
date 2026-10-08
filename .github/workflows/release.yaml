@@ -30,6 +30,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # contents:write is required by the chart-publish step (pushes to gh-pages);
+    # packages:write pushes images to ghcr.
+    permissions:
+      contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -71,20 +76,26 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Publish Helm chart to gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           curl -sSL https://get.helm.sh/helm-v3.15.4-linux-amd64.tar.gz | tar xz
           sudo mv linux-amd64/helm /usr/local/bin/helm
           CHART_VERSION=$(awk '/^version:/{print $2}' charts/service-spread-scheduler/Chart.yaml)
-          git config user.name "ci" && git config user.email "ci@users.noreply.github.com"
-          git fetch origin gh-pages || true
           mkdir -p /tmp/repo && cd /tmp/repo
-          git clone -q --branch gh-pages ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git . 2>/dev/null || git init -q && git remote add origin ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git || true
-          cp -r ${GITHUB_WORKSPACE}/charts/service-spread-scheduler /tmp/src-chart
+          # job-level contents:write + GITHUB_TOKEN let this clone push.
+          git clone -q --branch gh-pages "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" .
+          git config user.name "ci" && git config user.email "ci@users.noreply.github.com"
+          cp -r "${GITHUB_WORKSPACE}/charts/service-spread-scheduler" /tmp/src-chart
           helm package /tmp/src-chart -d .
-          helm repo index . --url https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY##*/}
-          git add -A && git commit -qm "chart ${CHART_VERSION} for ${GITHUB_REF_NAME}" || echo "no chart change"
-          git push -q origin HEAD:gh-pages
+          helm repo index . --url "https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY##*/}"
+          if git add -A && git diff --cached --quiet; then
+            echo "no chart change (${CHART_VERSION} already published)"
+          else
+            git commit -qm "chart ${CHART_VERSION} for ${GITHUB_REF_NAME}"
+            git push -q origin HEAD:gh-pages
+          fi
 
   # Docker Hub mirror (public, anonymous pull): the zero-config install
   # path. NOTE: job-level `if` cannot reference the `secrets` context
