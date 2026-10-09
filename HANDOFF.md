@@ -14,7 +14,7 @@
 | 发版 | **v0.2.1 全自动发版成功**（run 37743284488：release 5m55s ✓ + push-dockerhub 30s ✓）；v0.2.0 为部分发版（仅 ghcr 镜像，见 §六）；chart 0.1.2–0.2.1 在 gh-pages |
 | 分发 | **Docker Hub `bcyup/service-spread-scheduler` + `bcyup/service-spread-webhook`（公开匿名）**，v0.2.1 镜像 digest 与 CI push 日志逐字节一致（86ed2c49…/e99f1476…）；ACR 管线已退役（存量 v0.1.x 可拉） |
 | 文档 | README（中文，三段布局+完整 values 表+大陆 mirror 专节）/ RUNBOOK / deploy-checklist / release-checklist 全部对齐现状 |
-| 集群现场 | ACK 测试集群已清零验证残留；yup-dev kind 集群 ssp-e2e2 已删除（2026-10-08，原 v0.1.1 常驻与 KEDA 随之清场），e2e 环境待定新场地（不在 yup-dev） |
+| 集群现场 | ACK 测试集群已清零验证残留；**e2e 新场地已建：avl-pro5000 kind 集群 `ssp-e2e`**（2026-10-09，v1.28.15 单节点 + containerd docker.io mirror，chart 0.2.1 全 Pod Running + 端到端冒烟通过，见 §六） |
 
 ## 一、下一步（按优先级）
 
@@ -77,6 +77,8 @@
 11. **GitHub Actions job 级 `if:` 不允许 `secrets` 上下文**（只认 vars/github 等公共上下文）——775efb2 起在 job 级引用 `secrets.DOCKERHUB_TOKEN`，整份 release.yaml 被 GitHub 判为无效文件：tag 不会触发任何 job、push main 每次产生 0s 失败 run（无日志可查，需从 run 页面 HTML 抓 "Invalid workflow file" 报错）。后果：chart 0.1.4–0.1.6 与 Docker Hub 镜像全靠手动补发，HANDOFF 09-30 版误记为「CI 绿/打 tag 即自动」。教训：**改 workflow 后别只看 ci.yaml 绿——push main 后 release.yaml 若出现 0s run 即文件无效**；token 判空放 step 级 fail-loud（已修，7198e2d）。
 12. **chart 发布步首跑三连坑**（b89d4fe 新增该步时整份文件就是无效的，从未真正执行过，v0.2.0 首跑暴露，run 37741347699）：① `git config user.name` 在 workspace 目录执行而 commit 在 /tmp/repo——身份不生效，`Author identity unknown`；② 匿名 HTTPS push → `could not read Username`（exit 128）；③ 顶层 `contents: read` 无权推 gh-pages。修法（0e35379）：job 级 `permissions: contents: write`；clone URL 嵌 `x-access-token:${GITHUB_TOKEN}`；身份在 /tmp/repo 内配置；no-change 与失败显式分流，不再 `|| echo` 吞错。
 
+- **e2e 场地**（2026-10-09 起）：avl-pro5000 上 kind 集群 `ssp-e2e`（v1.28.15）。kubeconfig `/home/__su/.kube/config`。节点 containerd 配了 docker.io mirror（`docker.m.daocloud.io`/`dockerproxy.net`，cluster 配置 `/tmp/kind-ssp.yaml`——重建时勿丢）；**registry.k8s.io 代理在该 mirror 403**，测试镜像用 docker.io 的（如 busybox）。chart 0.2.1 已装（release `my-spread`@service-spread-system）。pro5000 已装 kind v0.24.0 / kubectl v1.28.15 / helm v3.16.4（/usr/local/bin）。
+
 ## 五、仓库导航
 
 ```
@@ -110,5 +112,6 @@ service-spread-scheduler/
 - **Docker Hub 分发演化**（09-30）：PAT 限制实证 → 双仓上线 → 0.1.4 实测大陆 kubelet 拉超时 → 0.1.5 回 ACR → **用户定 Plan A**：0.1.6 Docker Hub 唯一主管线 + 大陆节点 mirror 路线 + ACR 退役（b89d4fe/fc9472f，CI 绿）。
 - **release.yaml 无效文件事故修复**（10-08）：09-30 08:47 起（775efb2）job 级 if 引用 secrets 使整份 workflow 失效，tag 发版静默瘫痪 8 天未察觉；chart 0.1.4–0.1.6/Docker Hub 镜像实为手动补发。修复 = job 级只留 vars 判断 + step 级 fail-loud token guard（7198e2d），push main 验证无 0s run、ci 绿（37718490860）。
 - **v0.2.0 部分发版 + chart 步三坑修复 → v0.2.1 完整发版**（10-08）：v0.2.0（1edbec1）镜像双架构推 ghcr 成功，但 chart 步首跑即挂（身份作用域/匿名 push/权限不足三连坑，§四.12，修复 0e35379）。v0.2.1 tag 后管线首次完整自动跑通：release 5m55s ✓ + push-dockerhub 30s ✓（run 37743284488）；Docker Hub v0.2.1 digest 与 CI push 日志逐字节一致，chart 0.2.1 落 gh-pages。大陆 mirror 实测为下一未验项。
+- **e2e 场地迁 avl-pro5000 kind + chart 0.2.1 端到端冒烟**（10-09）：pro5000 装齐 kind/kubectl/helm（二进制经本机中转——pro5000 拉 GitHub release 附件断流）；kind `ssp-e2e`（v1.28.15）首建即复现大陆 kubelet 直连 docker.io 超时，节点 containerd 注入 mirror 后 chart 0.2.1 标准安装全 Pod Running。冒烟证据链：webhook 确定性名校验在线（报错给出 `ssp-f2a05766366a`）；scheduler 日志 `Successfully bound pod`；scale 至 3 副本被 `MaxPodsPerNodeExceeded quota=2/3 limit=2` 拒绝——maxPodsPerNode cap 在真集群验证。镜像坑：daocloud mirror 对 `google_containers/*` 与 `registry.k8s.io/*` 均 403，测试容器用 `docker.io/library/busybox`。
 
 （各阶段完整细节、证据与提交号见 git log 与本文件历史版本；设计取舍看两份设计文档。）
