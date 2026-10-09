@@ -1,0 +1,19 @@
+# kind cluster config for the ssp-e2e e2e venue (avl-pro5000, k8s 1.28.15).
+#
+# Why the containerd mirror patch exists: kind nodes run their own containerd
+# which does NOT inherit the host daemon's registry mirrors. On mainland
+# hosts (pro5000 verified 2026-10-09) kubelet-side pulls of registry-1.docker.io
+# time out (DeadlineExceeded) without a mirror — same failure mode as the ACK
+# field report (HANDOFF §四). The daocloud mirror proxies docker.io fine;
+# NOTE: its registry.k8s.io/* and google_containers/* proxies return 403 —
+# use docker.io images (e.g. busybox) for test containers.
+#
+# Recreate:  kind create cluster --config kind-ssp-e2e.yaml --image kindest/node:v1.28.15
+# kubeconfig lands in ~/.kube/config on the host.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: ssp-e2e
+containerdConfigPatches:
+- |-
+  [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
+    endpoint = ["https://docker.m.daocloud.io", "https://dockerproxy.net"]

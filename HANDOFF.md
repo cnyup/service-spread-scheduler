@@ -77,7 +77,7 @@
 11. **GitHub Actions job 级 `if:` 不允许 `secrets` 上下文**（只认 vars/github 等公共上下文）——775efb2 起在 job 级引用 `secrets.DOCKERHUB_TOKEN`，整份 release.yaml 被 GitHub 判为无效文件：tag 不会触发任何 job、push main 每次产生 0s 失败 run（无日志可查，需从 run 页面 HTML 抓 "Invalid workflow file" 报错）。后果：chart 0.1.4–0.1.6 与 Docker Hub 镜像全靠手动补发，HANDOFF 09-30 版误记为「CI 绿/打 tag 即自动」。教训：**改 workflow 后别只看 ci.yaml 绿——push main 后 release.yaml 若出现 0s run 即文件无效**；token 判空放 step 级 fail-loud（已修，7198e2d）。
 12. **chart 发布步首跑三连坑**（b89d4fe 新增该步时整份文件就是无效的，从未真正执行过，v0.2.0 首跑暴露，run 37741347699）：① `git config user.name` 在 workspace 目录执行而 commit 在 /tmp/repo——身份不生效，`Author identity unknown`；② 匿名 HTTPS push → `could not read Username`（exit 128）；③ 顶层 `contents: read` 无权推 gh-pages。修法（0e35379）：job 级 `permissions: contents: write`；clone URL 嵌 `x-access-token:${GITHUB_TOKEN}`；身份在 /tmp/repo 内配置；no-change 与失败显式分流，不再 `|| echo` 吞错。
 
-- **e2e 场地**（2026-10-09 起）：avl-pro5000 上 kind 集群 `ssp-e2e`（v1.28.15）。kubeconfig `/home/__su/.kube/config`。节点 containerd 配了 docker.io mirror（`docker.m.daocloud.io`/`dockerproxy.net`，cluster 配置 `/tmp/kind-ssp.yaml`——重建时勿丢）；**registry.k8s.io 代理在该 mirror 403**，测试镜像用 docker.io 的（如 busybox）。chart 0.2.1 已装（release `my-spread`@service-spread-system）。pro5000 已装 kind v0.24.0 / kubectl v1.28.15 / helm v3.16.4（/usr/local/bin）。
+- **e2e 场地**（2026-10-09 起）：avl-pro5000 上 kind 集群 `ssp-e2e`（v1.28.15）。kubeconfig `/home/__su/.kube/config`。节点 containerd 配了 docker.io mirror（`docker.m.daocloud.io`/`dockerproxy.net`；集群配置已入库 `hack/e2e/kind-ssp-e2e.yaml`，重建用它——勿丢 mirror 补丁）；**registry.k8s.io 代理在该 mirror 403**，测试镜像用 docker.io 的（如 busybox）。chart 0.2.1 已装（release `my-spread`@service-spread-system）。pro5000 已装 kind v0.24.0 / kubectl v1.28.15 / helm v3.16.4（/usr/local/bin）。
 
 ## 五、仓库导航
 
