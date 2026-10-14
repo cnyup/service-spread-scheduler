@@ -18,8 +18,8 @@
 
 ## 一、下一步（按优先级）
 
-1. **大陆节点配 mirror 后实测 v0.2.1**（部署前唯一未验项）：ACK 每台节点 `/etc/docker/daemon.json` 加 `registry-mirrors`（README 安装节有示例）→ `systemctl restart docker` → helm install 应全绿。未配 mirror 时 kubelet 拉 docker.io 会 DeadlineExceeded（0.1.4 实测复现）。
-2. 用户侧可选清理：GitHub Settings 删 4 个 ACR secrets + ENABLE_ACR variable；ACR 控制台三个仓库（scheduler/webhook/service-spread-chart）可删可留。
+1. **ACK 真集群验证**（部署前唯一未验项，侦察已完成 2026-10-09）：10 节点全 Ready（k8s 1.28.9 / containerd 1.6.36，3 台 ACL3 + 7 台 Ubuntu 20.04）。**落点已探明**：`/etc/containerd/config.toml:63` 已有 `config_path = "/etc/containerd/cert.d:/etc/containerd/certs.d"`（ACK 定制双路径），`cert.d/` 存在（含 dadi-ca + `_default`）而 `certs.d/` 不存在——docker.io mirror 的 hosts.toml 应放 `/etc/containerd/cert.d/docker.io/hosts.toml`。**注意**：ACR 存量镜像已全部清空（v0.1.0–v0.1.6 manifest 全 MISSING，HANDOFF 前版"ACR 存量可拉"过时），ACR 回退路径实际已不可用——mirror 实测因此从"可选"升级为"唯一路径"。侦察法：特权 Pod 挂宿主根 + 复用节点已有镜像（dadi-agent）避免拉取。执行序：单节点试点（写 hosts.toml → systemctl restart containerd → 拉 bcyup/* 镜像验证）→ 业务无感确认 → 批量 9 台 → helm install chart 0.2.1 → 多节点 spread 验证（replicas>单节点容量，观察分布 + capacity_deficit 指标）。
+2. 用户侧可选清理：GitHub Settings 删 4 个 ACR secrets + ENABLE_ACR variable；ACR 控制台三个仓库（已确认为空）可删。
 3. 非阻塞增强（按需）：`newKEDAIndexer` 周期重探（KEDA 后装目前需重启 scheduler，keda.sh 自动兜底）；GaugeVec 序列基数治理（已删服务的指标序列永生）。
 
 ## 二、整体链路（现役）
